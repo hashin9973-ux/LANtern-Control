@@ -19,6 +19,24 @@ public sealed class ClientMappingCache
         }
     }
 
+    public IReadOnlyList<IPAddress> RemoveByMac(PhysicalAddress macAddress)
+    {
+        ArgumentNullException.ThrowIfNull(macAddress);
+        lock (sync)
+        {
+            var addresses = Mappings
+                .Where(pair => pair.Value.Equals(macAddress))
+                .Select(pair => pair.Key)
+                .ToArray();
+            foreach (var address in addresses)
+            {
+                Mappings.TryRemove(address, out _);
+            }
+
+            return addresses;
+        }
+    }
+
     public bool Upsert(IPAddress address, PhysicalAddress macAddress)
     {
         ArgumentNullException.ThrowIfNull(address);
