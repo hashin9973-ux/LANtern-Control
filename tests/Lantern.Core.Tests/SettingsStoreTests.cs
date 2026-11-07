@@ -297,6 +297,62 @@ public sealed class SettingsStoreTests
     }
 
     [Fact]
+    public async Task SaveAndLoad_PersistsScriptAutomationPreferences()
+    {
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            var store = new SettingsStore(directory);
+            var settings = new AppSettings
+            {
+                ScriptAutomationEnabled = true,
+                ScriptAutomationIntervalSeconds = 300,
+                ScriptAutomationPath = @"C:\LANternScripts\refresh-devices.ps1",
+            };
+
+            await store.SaveAsync(settings);
+            var loaded = await store.LoadAsync();
+
+            Assert.True(loaded.ScriptAutomationEnabled);
+            Assert.Equal(300, loaded.ScriptAutomationIntervalSeconds);
+            Assert.Equal(
+                @"C:\LANternScripts\refresh-devices.ps1",
+                loaded.ScriptAutomationPath);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SaveAndLoad_DisablesScriptAutomationWithoutASelectedScript()
+    {
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            var store = new SettingsStore(directory);
+            var settings = new AppSettings
+            {
+                ScriptAutomationEnabled = true,
+                ScriptAutomationIntervalSeconds = 1,
+                ScriptAutomationPath = " ",
+            };
+
+            await store.SaveAsync(settings);
+            var loaded = await store.LoadAsync();
+
+            Assert.False(loaded.ScriptAutomationEnabled);
+            Assert.Equal(60, loaded.ScriptAutomationIntervalSeconds);
+            Assert.Null(loaded.ScriptAutomationPath);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ConcurrentStores_SerializeWritesToTheSameSettingsPath()
     {
         var directory = CreateTemporaryDirectory();
