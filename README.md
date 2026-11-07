@@ -178,7 +178,8 @@ known IP address, spaced 150 ms apart, then listens for replies. It does not
 enumerate or probe unknown subnet addresses, perform ping sweeps, or repeatedly
 probe every device every few seconds. While control is running, only known
 devices that have not been observed for at least 45 seconds are checked, no
-more than once per minute.
+more than once per minute per IP. Manual scans respect the same 60-second
+per-address cooldown, so repeated button clicks do not generate extra requests.
 
 A responding remembered device is marked online when LANtern receives its
 ARP reply or observes its traffic. A known device is treated as online for up
