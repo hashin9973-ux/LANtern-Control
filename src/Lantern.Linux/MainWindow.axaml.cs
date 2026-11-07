@@ -770,6 +770,62 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void ClearDeviceCacheButton_OnClick(
+        object? sender,
+        RoutedEventArgs eventArgs)
+    {
+        if (demoMode || busy)
+        {
+            return;
+        }
+
+        var offlineDevices = Devices
+            .Where(device => !device.IsOnline && !device.IsProtected)
+            .ToArray();
+        if (offlineDevices.Length == 0)
+        {
+            SetStatus("No offline device cache entries to clear.");
+            return;
+        }
+
+        busy = true;
+        UpdateButtons();
+        try
+        {
+            foreach (var device in offlineDevices)
+            {
+                var macAddress = PhysicalAddress.Parse(device.MacAddress);
+                engine.ForgetDevice(macAddress);
+                registry.Remove(macAddress);
+                if (settings.Devices.TryGetValue(device.MacKey, out var preferences))
+                {
+                    preferences.LastKnownIp = null;
+                    preferences.LastSeenUtc = null;
+                }
+
+                devicesByMac.Remove(device.MacKey);
+                Devices.Remove(device);
+            }
+
+            UpdateKnownDeviceHints();
+            await settingsStore.SaveAsync(settings);
+            RefreshDashboard();
+            SetStatus(
+                $"Cleared {offlineDevices.Length} offline device cache entr" +
+                $"{(offlineDevices.Length == 1 ? "y" : "ies")}. Saved names and rules were preserved.");
+        }
+        catch (Exception exception) when (
+            exception is IOException or InvalidOperationException or FormatException)
+        {
+            SetStatus($"Could not clear the device cache: {exception.Message}");
+        }
+        finally
+        {
+            busy = false;
+            UpdateButtons();
+        }
+    }
+
     private void ClearActivityButton_OnClick(object? sender, RoutedEventArgs eventArgs)
     {
         ClearObservedActivity();
