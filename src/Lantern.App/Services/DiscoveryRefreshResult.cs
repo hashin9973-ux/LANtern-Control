@@ -27,6 +27,6 @@ public sealed record DiscoveryRefreshResult(
             : $"Device inventory refreshed — {CachedEntriesLoaded} neighbor-cache entries, " +
               $"{KnownDeviceCount} known devices. ARP replies received from {DevicesResponded} of " +
               $"{CandidateHosts} candidate addresses after {ProbeRequestsSent} paced requests " +
-              "(maximum 50 ARP requests per second) " +
+              "(maximum 100 ARP requests per second) "
               $"({RetryRequestsSent} retries).";
 }
