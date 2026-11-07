@@ -9,12 +9,18 @@ $publishDirectory = Join-Path $projectRoot "release"
 $installerProject = Join-Path $projectRoot "installer\LanternControl.wixproj"
 $installerVerification = Join-Path $projectRoot "scripts\verify-msi-installer.ps1"
 $projectFile = Join-Path $projectRoot "src\Lantern.App\Lantern.App.csproj"
-$solutionFile = Join-Path $projectRoot "LanternControl.slnx"
 $releaseVersion = "0.1.4"
 
-dotnet test $solutionFile -c $Configuration
-if ($LASTEXITCODE -ne 0) {
-    throw "Tests failed."
+$testProjects = @(
+    "tests\Lantern.Core.Tests\Lantern.Core.Tests.csproj",
+    "tests\Lantern.App.Tests\Lantern.App.Tests.csproj",
+    "tests\Lantern.Linux.Tests\Lantern.Linux.Tests.csproj"
+)
+foreach ($testProject in $testProjects) {
+    dotnet test (Join-Path $projectRoot $testProject) -c $Configuration
+    if ($LASTEXITCODE -ne 0) {
+        throw "Tests failed: $testProject"
+    }
 }
 
 & $installerVerification -ProjectPath $installerProject
