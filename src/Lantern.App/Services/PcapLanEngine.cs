@@ -19,6 +19,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private readonly ClientMappingCache clientMappings = new();
     private readonly ArpIdentityMonitor identityMonitor = new();
     private readonly ConcurrentDictionary<IPAddress, DateTimeOffset> lastPresenceProbeAt = new();
+    private DateTimeOffset lastPresenceProbeBatchAt = DateTimeOffset.MinValue;
     private readonly ResolvedDeviceNameClaims resolvedNameClaims = new(Dns.GetHostName());
     private readonly ConcurrentDictionary<string, byte> resolvingNames =
         new(StringComparer.OrdinalIgnoreCase);
@@ -318,10 +319,18 @@ public sealed class PcapLanEngine : IAsyncDisposable
         bool force,
         CancellationToken cancellationToken)
     {
+        var now = DateTimeOffset.UtcNow;
+        if (lastPresenceProbeBatchAt != DateTimeOffset.MinValue &&
+            now >= lastPresenceProbeBatchAt &&
+            now - lastPresenceProbeBatchAt < DeviceProbePolicy.ProbeInterval)
+        {
+            return 0;
+        }
+
         var targets = DeviceProbePolicy.GetTargets(
             registry.Peek(),
             activeProfile,
-            DateTimeOffset.UtcNow,
+            now,
             force,
             lastPresenceProbeAt);
         if (targets.Count == 0)
@@ -329,6 +338,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             return 0;
         }
 
+        lastPresenceProbeBatchAt = now;
         if (arpDevice is not null)
         {
             return await SendPresenceProbesAsync(
