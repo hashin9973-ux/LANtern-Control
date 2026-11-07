@@ -37,15 +37,23 @@ public sealed class DeviceRegistry
         IPAddress ipAddress,
         PhysicalAddress macAddress,
         DateTimeOffset rememberedAt,
-        string? hostName = null) =>
-        AddOrUpdate(ipAddress, macAddress, rememberedAt, hostName, refreshLastSeen: false);
+        string? hostName = null,
+        DateTimeOffset? lastSeen = null) =>
+        AddOrUpdate(
+            ipAddress,
+            macAddress,
+            rememberedAt,
+            hostName,
+            refreshLastSeen: false,
+            rememberedLastSeen: lastSeen);
 
     private void AddOrUpdate(
         IPAddress ipAddress,
         PhysicalAddress macAddress,
         DateTimeOffset timestamp,
         string? hostName,
-        bool refreshLastSeen)
+        bool refreshLastSeen,
+        DateTimeOffset? rememberedLastSeen = null)
     {
         ArgumentNullException.ThrowIfNull(ipAddress);
         ArgumentNullException.ThrowIfNull(macAddress);
@@ -58,7 +66,9 @@ public sealed class DeviceRegistry
                 IpAddress = ipAddress,
                 HostName = hostName,
                 FirstSeen = timestamp,
-                LastSeen = refreshLastSeen ? timestamp : DateTimeOffset.MinValue,
+                LastSeen = refreshLastSeen
+                    ? timestamp
+                    : rememberedLastSeen ?? DateTimeOffset.MinValue,
             },
             (_, existing) =>
             {
@@ -66,6 +76,12 @@ public sealed class DeviceRegistry
                 if (refreshLastSeen)
                 {
                     existing.LastSeen = timestamp;
+                }
+                else if (rememberedLastSeen is { } lastSeen &&
+                         (existing.LastSeen == DateTimeOffset.MinValue ||
+                          lastSeen > existing.LastSeen))
+                {
+                    existing.LastSeen = lastSeen;
                 }
 
                 if (!string.IsNullOrWhiteSpace(hostName))
