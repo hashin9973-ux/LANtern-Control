@@ -12,6 +12,8 @@ public enum HostDiscoveryMethod
     Tcp,
     NetBios,
     Mdns,
+    Ssdp,
+    MdnsServiceBrowse,
 }
 
 public sealed record DiscoveredHost(
@@ -35,6 +37,11 @@ public sealed record LocalHostDiscoveryResult(
 
     public int MdnsHosts => Hosts.Count(host => host.Method == HostDiscoveryMethod.Mdns);
 
+    public int SsdpHosts => Hosts.Count(host => host.Method == HostDiscoveryMethod.Ssdp);
+
+    public int MdnsServiceHosts =>
+        Hosts.Count(host => host.Method == HostDiscoveryMethod.MdnsServiceBrowse);
+
     public string StatusMessage => RateLimited
         ? $"Supplemental protocol discovery skipped for {CandidateHosts} unconfirmed candidate(s): " +
           "this adapter was scanned less than 60 seconds ago."
@@ -46,10 +53,12 @@ public sealed record LocalHostDiscoveryResult(
             : $"Independent host discovery: {Hosts.Count} live IP endpoint(s) from " +
               $"{CandidateHosts} unconfirmed local candidate(s); " +
               $"{SkippedRecentlyObserved} recently observed address(es) skipped. " +
-              $"Sent {ProbeAttempts} paced protocol probe(s) " +
-              $"(at least 50 ms between probe starts, at most 8 concurrent hosts, " +
-              "and no more than 5 probes per unconfirmed address; one pass per minute). " +
-              $"ICMP {IcmpHosts}, TCP {TcpHosts}, NetBIOS {NetBiosHosts}, mDNS {MdnsHosts}.";
+              $"Sent {ProbeAttempts} paced discovery query/probe(s) " +
+              "(at least 50 ms between starts, up to two link-local multicast queries, " +
+              "then no more than 5 direct probes per remaining address, at most 8 concurrent hosts, " +
+              "and one pass per minute). " +
+              $"SSDP {SsdpHosts}, DNS-SD/mDNS {MdnsServiceHosts}, ICMP {IcmpHosts}, " +
+              $"TCP {TcpHosts}, NetBIOS {NetBiosHosts}, reverse mDNS {MdnsHosts}.";
 }
 
 /// <summary>
@@ -73,6 +82,7 @@ public sealed class LocalHostDiscoveryService
     private readonly SemaphoreSlim probeStartSync = new(1, 1);
     private readonly Dictionary<string, DateTimeOffset> lastScanStartedAt =
         new(StringComparer.Ordinal);
+    private readonly LocalMulticastDiscoveryService multicastDiscoveryService = new();
     private long nextProbeTimestamp;
 
     public async Task<LocalHostDiscoveryResult> ScanAsync(
@@ -116,8 +126,24 @@ public sealed class LocalHostDiscoveryService
             var probeAttempts = 0;
             void CountProbeAttempt() => Interlocked.Increment(ref probeAttempts);
 
+            // First ask the local link for advertised UPnP and DNS-SD services.
+            // Hosts found this way are removed from the subsequent per-address
+            // fallback list, avoiding duplicate traffic to those devices.
+            var multicastHosts = await multicastDiscoveryService.ScanAsync(
+                adapter,
+                targets.ToHashSet(),
+                (send, token) => RunPacedSendAsync(send, token, CountProbeAttempt),
+                cancellationToken);
+
+            var multicastResponders = multicastHosts
+                .Select(host => host.Address)
+                .ToHashSet();
+            var remainingTargets = targets
+                .Where(address => !multicastResponders.Contains(address))
+                .ToArray();
+
             using var hostLimiter = new SemaphoreSlim(MaximumConcurrentHosts);
-            var probes = targets.Select(address =>
+            var probes = remainingTargets.Select(address =>
                 ProbeHostWithThrottleAsync(
                     address,
                     hostLimiter,
@@ -127,9 +153,8 @@ public sealed class LocalHostDiscoveryService
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            var hosts = results
-                .Where(host => host is not null)
-                .Select(host => host!)
+            var hosts = multicastHosts
+                .Concat(results.Where(host => host is not null).Select(host => host!))
                 .OrderBy(host => host.Address.GetAddressBytes(), ByteArrayComparer.Instance)
                 .ToArray();
 
