@@ -512,6 +512,7 @@ public partial class MainWindow : Window
         scriptEditorDirty = true;
         ScriptAutomationStatusText.Text =
             "Unsaved editor changes. Save the script before relying on a scheduled run.";
+        UpdateScriptAutomationControls();
     }
 
     private void SetScriptEditorText(string content)
@@ -625,7 +626,7 @@ public partial class MainWindow : Window
         RoutedEventArgs eventArgs)
     {
         var enabled = ScriptAutomationCheckBox.IsChecked == true;
-        if (enabled && !TryGetScriptAutomationInterval(out var intervalSeconds))
+        if (enabled && !TryGetScriptAutomationInterval(out _))
         {
             ScriptAutomationCheckBox.IsChecked = false;
             ScriptAutomationStatusText.Text =
