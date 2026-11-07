@@ -315,11 +315,12 @@ public partial class MainWindow : Window
             var macKey = TrafficPolicy.NormalizeMac(snapshot.MacAddress.ToString());
             visibleKeys.Add(macKey);
             settings.Devices.TryGetValue(macKey, out var preferences);
-            if (!IsGateway(snapshot) && snapshot.LastSeen != DateTimeOffset.MinValue)
+            if (!IsGateway(snapshot))
             {
                 preferences ??= settings.Devices[macKey] = new DevicePreferences();
                 preferences.LastKnownIp = snapshot.IpAddress.ToString();
-                if (preferences.LastSeenUtc is null || snapshot.LastSeen > preferences.LastSeenUtc)
+                if (snapshot.LastSeen != DateTimeOffset.MinValue &&
+                    (preferences.LastSeenUtc is null || snapshot.LastSeen > preferences.LastSeenUtc))
                 {
                     preferences.LastSeenUtc = snapshot.LastSeen;
                 }
