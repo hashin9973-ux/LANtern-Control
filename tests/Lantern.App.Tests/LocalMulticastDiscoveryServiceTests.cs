@@ -24,7 +24,9 @@ public sealed class LocalMulticastDiscoveryServiceTests
     [Theory]
     [InlineData("HTTP/1.1 200 OK\r\nST: upnp:rootdevice\r\n\r\n", true)]
     [InlineData("HTTP/1.0 200 OK\r\nST: upnp:rootdevice\r\n\r\n", true)]
-    [InlineData("HTTP/1.1 404 Not Found\r\n\r\n", false)]
+    [InlineData("HTTP/1.1 200 OK\r\nST: ssdp:all\r\n\r\n", false)]
+    [InlineData("HTTP/1.1 200 OK\r\n\r\n", false)]
+    [InlineData("HTTP/1.1 404 Not Found\r\nST: upnp:rootdevice\r\n\r\n", false)]
     [InlineData("not an SSDP response", false)]
     public void IsSsdpResponse_OnlyAcceptsSuccessfulHttpResponses(
         string response,
@@ -38,14 +40,14 @@ public sealed class LocalMulticastDiscoveryServiceTests
     [Fact]
     public void BuildMdnsServiceBrowseQuery_RequestsDnsSdServiceTypeEnumeration()
     {
-        const ushort transactionId = 0x1234;
+        const ushort transactionId = 0;
         var query = LocalMulticastDiscoveryService.BuildMdnsServiceBrowseQuery(transactionId);
 
         Assert.Equal(
             transactionId,
             BinaryPrimitives.ReadUInt16BigEndian(query.AsSpan(0, 2)));
-        Assert.Equal(0, BinaryPrimitives.ReadUInt16BigEndian(query.AsSpan(2, 2)));
-        Assert.Equal(1, BinaryPrimitives.ReadUInt16BigEndian(query.AsSpan(4, 2)));
+        Assert.Equal((ushort)0, BinaryPrimitives.ReadUInt16BigEndian(query.AsSpan(2, 2)));
+        Assert.Equal((ushort)1, BinaryPrimitives.ReadUInt16BigEndian(query.AsSpan(4, 2)));
 
         var labels = new List<string>();
         var offset = 12;
@@ -59,16 +61,16 @@ public sealed class LocalMulticastDiscoveryServiceTests
         }
 
         Assert.Equal(
-            ["_services", "_dns-sd", "_udp", "local"],
+            new[] { "_services", "_dns-sd", "_udp", "local" },
             labels);
-        Assert.Equal(12, BinaryPrimitives.ReadUInt16BigEndian(query.AsSpan(offset + 1, 2)));
-        Assert.Equal(1, BinaryPrimitives.ReadUInt16BigEndian(query.AsSpan(offset + 3, 2)));
+        Assert.Equal((ushort)12, BinaryPrimitives.ReadUInt16BigEndian(query.AsSpan(offset + 1, 2)));
+        Assert.Equal((ushort)1, BinaryPrimitives.ReadUInt16BigEndian(query.AsSpan(offset + 3, 2)));
     }
 
     [Fact]
     public void IsMdnsServiceBrowseResponse_AcceptsMatchingDnsSdPtrAnswer()
     {
-        const ushort transactionId = 0x4321;
+        const ushort transactionId = 0;
         var response = BuildDnsSdResponse(transactionId);
 
         Assert.True(
