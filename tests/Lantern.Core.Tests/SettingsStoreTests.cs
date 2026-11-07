@@ -272,6 +272,31 @@ public sealed class SettingsStoreTests
     }
 
     [Fact]
+    public async Task SaveAndLoad_PersistsAutomaticScanPreferences()
+    {
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            var store = new SettingsStore(directory);
+            var settings = new AppSettings
+            {
+                AutoScanEnabled = true,
+                AutoScanIntervalSeconds = 120,
+            };
+
+            await store.SaveAsync(settings);
+            var loaded = await store.LoadAsync();
+
+            Assert.True(loaded.AutoScanEnabled);
+            Assert.Equal(120, loaded.AutoScanIntervalSeconds);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ConcurrentStores_SerializeWritesToTheSameSettingsPath()
     {
         var directory = CreateTemporaryDirectory();
