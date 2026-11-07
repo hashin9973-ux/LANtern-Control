@@ -279,7 +279,7 @@ public partial class MainWindow : Window
         {
             foreach (var device in offlineDevices)
             {
-                var macAddress = PhysicalAddress.Parse(device.MacAddress);
+                var macAddress = PhysicalAddress.Parse(device.MacKey);
                 engine.ForgetDevice(macAddress);
                 registry.Remove(macAddress);
                 if (settings.Devices.TryGetValue(device.MacKey, out var preferences))
