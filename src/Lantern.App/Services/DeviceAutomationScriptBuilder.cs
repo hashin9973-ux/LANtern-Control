@@ -130,9 +130,10 @@ public static class DeviceAutomationScriptBuilder
 
             # The editor is a separate page, so switch back to Overview before targeting device controls.
             $OverviewNavigationButton = Get-LanternElement -AutomationId 'nav_overview'
-            $OverviewNavigationButton.GetCurrentPattern(
+            $OverviewInvokePattern = $OverviewNavigationButton.GetCurrentPattern(
                 [System.Windows.Automation.InvokePattern]::Pattern
-            ).Invoke()
+            )
+            $OverviewInvokePattern.Invoke()
             Start-Sleep -Milliseconds 500
 
             # Bring the target row into the visible device list. This also handles DataGrid virtualization.
@@ -155,7 +156,7 @@ public static class DeviceAutomationScriptBuilder
                     }
 
                     $ScrollPattern.ScrollVertical(
-                        [System.Windows.Automation.ScrollAmount]::SmallIncrement
+                        [System.Windows.Automation.ScrollAmount]::LargeIncrement
                     )
                     Start-Sleep -Milliseconds 40
                 }
