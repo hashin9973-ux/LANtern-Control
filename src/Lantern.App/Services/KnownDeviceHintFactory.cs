@@ -25,7 +25,7 @@ public static class KnownDeviceHintFactory
                            (learnedName is not null && !ambiguousNames.Contains(learnedName)
                                ? learnedName
                                : null);
-            hints.Add(new KnownDeviceHint(macAddress, lastKnownIp, hostName));
+            hints.Add(new KnownDeviceHint(macAddress, lastKnownIp, hostName, pair.Value.LastSeenUtc));
         }
 
         return hints;
