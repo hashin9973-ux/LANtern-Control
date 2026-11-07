@@ -313,7 +313,7 @@ public sealed class LinuxMainWindowTests
         Assert.DoesNotContain("1 second samples", xaml, StringComparison.Ordinal);
         Assert.DoesNotContain("Text=\"LINUX\"", xaml, StringComparison.Ordinal);
         Assert.Contains("controls:RedWatcherLogo", xaml, StringComparison.Ordinal);
-        Assert.Contains("Content=\"Refresh devices\" IsVisible=\"False\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("Content=\"Scan devices\" IsVisible=\"False\"", xaml, StringComparison.Ordinal);
         Assert.Contains("Content=\"Stop &amp; restore\" IsVisible=\"False\"", xaml, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"WebsiteActivityCountText\"", xaml, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"DomainRuleCountText\"", xaml, StringComparison.Ordinal);
