@@ -593,7 +593,7 @@ public partial class MainWindow : Window
                 $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
             try
             {
-                File.WriteAllText(temporaryPath, scriptContent, new UTF8Encoding(false));
+                File.WriteAllText(temporaryPath, scriptContent, new UTF8Encoding(true));
                 File.Move(temporaryPath, fullPath, overwrite: true);
             }
             finally
