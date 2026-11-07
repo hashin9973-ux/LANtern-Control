@@ -72,6 +72,14 @@ public sealed class LinuxLanEngine : IAsyncDisposable
 
     public event EventHandler<string>? IdentityAlertDetected;
 
+    public void ForgetDevice(PhysicalAddress macAddress)
+    {
+        foreach (var address in clientMappings.RemoveByMac(macAddress))
+        {
+            frameRouter?.RemoveClient(address);
+        }
+    }
+
     public void ReplaceKnownDeviceHints(IEnumerable<KnownDeviceHint> hints)
     {
         ArgumentNullException.ThrowIfNull(hints);
