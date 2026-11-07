@@ -41,6 +41,7 @@ public partial class MainWindow : Window
         new(StringComparer.OrdinalIgnoreCase);
     private readonly TrafficHistory trafficHistory = new(TrafficSamplingProfile.Capacity, TrafficSamplingProfile.Retention);
     private readonly GitHubUpdateChecker updateChecker = new(UpdateHttpClient);
+    private readonly LocalHostDiscoveryService localHostDiscoveryService = new();
     private PcapLanEngine engine;
     private AppSettings settings = new();
     private DateTimeOffset? controlStartedAt;
@@ -237,12 +238,97 @@ public partial class MainWindow : Window
         try
         {
             UpdateKnownDeviceHints();
-            SetStatus("Reading neighbor cache and starting a paced local IPv4 discovery pass…", null);
-            var result = await engine.ScanDevicesAsync(adapter);
+            var scanStartedAt = DateTimeOffset.UtcNow;
+            SetStatus(
+                "Running independent ICMP, TCP, NetBIOS and mDNS discovery alongside ARP inventory…",
+                null);
+
+            // Run the independent reachability sweep while the existing ARP/cache
+            // path refreshes verified link-layer identities.
+            var hostDiscoveryTask = localHostDiscoveryService.ScanAsync(adapter);
+            var arpDiscoveryTask = engine.ScanDevicesAsync(adapter);
+
+            DiscoveryRefreshResult arpResult;
+            string? arpFailure = null;
+            try
+            {
+                arpResult = await arpDiscoveryTask;
+            }
+            catch (Exception exception)
+            {
+                arpFailure = exception.Message;
+                arpResult = new DiscoveryRefreshResult(
+                    0,
+                    registry.Peek().Count,
+                    ProbeWarning: exception.Message);
+            }
+
+            LocalHostDiscoveryResult hostResult;
+            string? hostFailure = null;
+            try
+            {
+                hostResult = await hostDiscoveryTask;
+            }
+            catch (Exception exception)
+            {
+                hostFailure = exception.Message;
+                hostResult = new LocalHostDiscoveryResult([], 0);
+            }
+
+            var liveMacByIp = registry.Peek()
+                .Where(snapshot =>
+                    snapshot.HasMacAddress &&
+                    snapshot.LastSeen >= scanStartedAt)
+                .GroupBy(snapshot => snapshot.IpAddress)
+                .ToDictionary(group => group.Key, group => group.First());
+
+            foreach (var host in hostResult.Hosts)
+            {
+                if (liveMacByIp.TryGetValue(host.Address, out var macSnapshot))
+                {
+                    if (!string.IsNullOrWhiteSpace(host.HostName))
+                    {
+                        registry.SetHostName(macSnapshot.MacAddress, host.HostName);
+                    }
+                }
+                else
+                {
+                    // A live IP must remain visible even if ARP did not yield a
+                    // trustworthy MAC. Such rows are explicitly inventory-only.
+                    registry.ObserveIpOnly(
+                        host.Address,
+                        DateTimeOffset.UtcNow,
+                        host.HostName);
+                }
+            }
+
+            var ipOnlyCount = hostResult.Hosts
+                .Select(host => host.Address)
+                .Distinct()
+                .Count(address => !liveMacByIp.ContainsKey(address));
+
             RefreshDevices(null, EventArgs.Empty);
             await SaveSettingsIfDirtyAsync();
-            DetailStatusText.Text = result.StatusMessage;
-            SetStatus(result.StatusMessage, true);
+
+            var status = $"{hostResult.StatusMessage} {arpResult.StatusMessage}";
+            if (ipOnlyCount > 0)
+            {
+                status +=
+                    $" {ipOnlyCount} responding endpoint(s) had no verified MAC mapping and are shown as inventory-only.";
+            }
+
+            if (!string.IsNullOrWhiteSpace(hostFailure))
+            {
+                status += $" Independent discovery warning: {hostFailure}";
+            }
+
+            if (!string.IsNullOrWhiteSpace(arpFailure))
+            {
+                status += $" ARP discovery warning: {arpFailure}";
+            }
+
+            DetailStatusText.Text = status;
+            SetStatus(status, true);
         }
         catch (Exception exception)
         {
@@ -298,10 +384,18 @@ public partial class MainWindow : Window
                     }
                 }
 
-                var macAddress = PhysicalAddress.Parse(device.MacKey);
-                engine.ForgetDevice(macAddress);
-                registry.Remove(macAddress);
-                deviceIndex.Remove(device.MacKey);
+                if (device.HasMacAddress)
+                {
+                    var macAddress = PhysicalAddress.Parse(device.MacKey);
+                    engine.ForgetDevice(macAddress);
+                    registry.Remove(macAddress);
+                }
+                else if (IPAddress.TryParse(device.IpAddress, out var ipOnlyAddress))
+                {
+                    registry.RemoveIpOnly(ipOnlyAddress);
+                }
+
+                deviceIndex.Remove(device.DeviceKey);
                 Devices.Remove(device);
             }
 
@@ -847,8 +941,16 @@ public partial class MainWindow : Window
                 continue;
             }
 
-            var key = snapshot.MacAddress.ToString();
-            settings.Devices.TryGetValue(key, out var preferences);
+            var macKey = snapshot.HasMacAddress
+                ? TrafficPolicy.NormalizeMac(snapshot.MacAddress.ToString())
+                : null;
+            var key = macKey ?? $"ip:{snapshot.IpAddress}";
+            DevicePreferences? preferences = null;
+            if (macKey is not null)
+            {
+                settings.Devices.TryGetValue(macKey, out preferences);
+            }
+
             var isGateway = activeProfile is not null &&
                             snapshot.IpAddress.Equals(activeProfile.GatewayAddress);
             var presence = isGateway
@@ -860,9 +962,9 @@ public partial class MainWindow : Window
             }
 
             visibleKeys.Add(key);
-            if (!isGateway)
+            if (!isGateway && macKey is not null)
             {
-                preferences ??= settings.Devices[key] = new DevicePreferences();
+                preferences ??= settings.Devices[macKey] = new DevicePreferences();
                 var currentIp = snapshot.IpAddress.ToString();
                 if (!string.Equals(preferences.LastKnownIp, currentIp, StringComparison.Ordinal))
                 {
@@ -890,7 +992,11 @@ public partial class MainWindow : Window
                     snapshot,
                     preferences,
                     isGateway,
-                    isGateway ? "Gateway — protected" : "Online");
+                    isGateway
+                        ? "Gateway — protected"
+                        : snapshot.HasMacAddress
+                            ? "Online"
+                            : "MAC unavailable — inventory only");
                 deviceIndex[key] = viewModel;
                 Devices.Add(viewModel);
             }
@@ -905,10 +1011,10 @@ public partial class MainWindow : Window
         if (canMutateView)
         {
             foreach (var stale in Devices
-                         .Where(device => !visibleKeys.Contains(device.MacKey))
+                         .Where(device => !visibleKeys.Contains(device.DeviceKey))
                          .ToArray())
             {
-                deviceIndex.Remove(stale.MacKey);
+                deviceIndex.Remove(stale.DeviceKey);
                 Devices.Remove(stale);
             }
 
