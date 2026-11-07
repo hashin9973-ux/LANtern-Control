@@ -201,8 +201,9 @@ DHCP lease history, or managed-switch telemetry provide stronger evidence.
 Software cannot increase Wi-Fi radio range or scan through walls. Live
 discovery is limited by the selected adapter's radio coverage, the local
 Layer-2 network, access-point isolation, VLAN boundaries, and packets that are
-already visible to the adapter. A device that has never been observed cannot be confirmed from a silent
-network. LANtern can check only previously known IP addresses; if a remembered
+already visible to the adapter. A device that has never been observed cannot be
+confirmed from a silent network. LANtern can check only previously known IP addresses;
+if a remembered
 device moves to a different IP and emits no traffic, its new address may not be
 known until it communicates or a fresh DHCP/ARP observation is captured.
 
