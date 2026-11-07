@@ -254,7 +254,8 @@ public partial class MainWindow : Window
     private async void AutoScanCheckBox_OnClick(object sender, RoutedEventArgs eventArgs)
     {
         var enabled = AutoScanCheckBox.IsChecked == true;
-        if (enabled && !TryGetAutoScanInterval(out var intervalSeconds))
+        var intervalSeconds = settings.AutoScanIntervalSeconds;
+        if (enabled && !TryGetAutoScanInterval(out intervalSeconds))
         {
             AutoScanCheckBox.IsChecked = false;
             SetStatus(
