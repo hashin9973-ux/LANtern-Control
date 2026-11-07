@@ -11,14 +11,14 @@ public sealed class DiscoveryRefreshResultTests
         var result = new DiscoveryRefreshResult(
             3,
             7,
-            258,
+            498,
             DevicesResponded: 6,
-            RetryRequestsSent: 6,
+            RetryRequestsSent: 246,
             CandidateHosts: 252);
 
         Assert.Equal(
             "Device inventory refreshed — 3 neighbor-cache entries, 7 known devices. " +
-            "ARP replies received from 6 of 252 candidate addresses after 258 paced requests (6 retries).",
+            "ARP replies received from 6 of 252 candidate addresses after 498 paced requests (246 retries).",
             result.StatusMessage);
     }
 
