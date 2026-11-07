@@ -13,7 +13,7 @@ namespace Lantern.App.Services;
 /// </summary>
 public sealed class LocalMulticastDiscoveryService
 {
-    private const int MaximumResponsesPerProtocol = 64;
+    private const int MaximumResponsesPerProtocol = 253;
     private const int MaximumDatagramBytes = 16 * 1024;
 
     private static readonly IPEndPoint SsdpEndpoint =
