@@ -151,6 +151,14 @@ public partial class MainWindow : Window
         ScriptAutomationCheckBox.IsChecked = settings.ScriptAutomationEnabled;
         ConfigureScriptAutomationTimer();
         UpdateScriptAutomationControls();
+        if (settings.ScriptAutomationEnabled &&
+            (string.IsNullOrWhiteSpace(settings.ScriptAutomationPath) ||
+             !File.Exists(settings.ScriptAutomationPath)))
+        {
+            ScriptAutomationStatusText.Text =
+                "Scheduled execution is enabled, but the selected script is missing. Browse to a valid .ps1 file.";
+        }
+
         LoadDomainRulesFromSettings();
         var adapters = WindowsAdapterService.GetUsableAdapters();
         AdapterSelector.ItemsSource = adapters;
@@ -593,8 +601,8 @@ public partial class MainWindow : Window
             return Task.CompletedTask;
         }
 
-        if (string.IsNullOrWhiteSpace(settings.ScriptAutomationPath) ||
-            !File.Exists(settings.ScriptAutomationPath))
+        var scriptPath = settings.ScriptAutomationPath;
+        if (string.IsNullOrWhiteSpace(scriptPath) || !File.Exists(scriptPath))
         {
             ScriptAutomationStatusText.Text =
                 "The selected script is missing. Browse to a valid .ps1 file.";
@@ -603,9 +611,7 @@ public partial class MainWindow : Window
 
         scriptRunInProgress = true;
         UpdateScriptAutomationControls();
-        activeScriptRunTask = RunSelectedScriptCoreAsync(
-            settings.ScriptAutomationPath,
-            isScheduled);
+        activeScriptRunTask = RunSelectedScriptCoreAsync(scriptPath, isScheduled);
         return activeScriptRunTask;
     }
 
