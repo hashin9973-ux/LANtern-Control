@@ -12,9 +12,6 @@ namespace Lantern.Linux.Services;
 
 public sealed class LinuxLanEngine : IAsyncDisposable
 {
-    public static TimeSpan ProbeInterval { get; } = TimeSpan.FromMilliseconds(10);
-    public static TimeSpan ProbeReplyWindow { get; } = TimeSpan.FromMilliseconds(800);
-
     private readonly DeviceRegistry registry;
     private readonly TrafficPolicy policy;
     private readonly LinuxFrameDeduplicator frameDeduplicator = new();
@@ -22,6 +19,7 @@ public sealed class LinuxLanEngine : IAsyncDisposable
     private readonly SemaphoreSlim refreshSync = new(1, 1);
     private readonly SemaphoreSlim stopSync = new(1, 1);
     private readonly ClientMappingCache clientMappings = new();
+    private readonly ArpIdentityMonitor identityMonitor = new();
     private readonly ResolvedDeviceNameClaims resolvedNameClaims = new(Dns.GetHostName());
     private ConcurrentDictionary<IPAddress, PhysicalAddress> clients => clientMappings.Mappings;
     private readonly ConcurrentDictionary<string, byte> resolvingNames =
@@ -40,8 +38,6 @@ public sealed class LinuxLanEngine : IAsyncDisposable
     private LinuxOffloadSession? offloadSession;
     private LinuxIpForwardingSession? ipForwardingSession;
     private TaskCompletionSource<PhysicalAddress>? gatewayResolution;
-    private ConcurrentDictionary<IPAddress, PhysicalAddress>? activeProbeReplies;
-    private ConcurrentDictionary<string, IPAddress>? activeKnownDeviceReplies;
     private KnownDeviceHint[] knownDeviceHints = [];
     private string[] rejectedResolvedNames = [];
     private volatile bool controlling;
@@ -70,6 +66,8 @@ public sealed class LinuxLanEngine : IAsyncDisposable
     public event EventHandler<LinuxEngineStateChangedEventArgs>? StateChanged;
     public event EventHandler<DeviceIdentityLearnedEventArgs>? DeviceIdentityLearned;
     public event EventHandler<DeviceDomainObservedEventArgs>? DeviceDomainObserved;
+
+    public event EventHandler<string>? IdentityAlertDetected;
 
     public void ReplaceKnownDeviceHints(IEnumerable<KnownDeviceHint> hints)
     {
@@ -101,6 +99,16 @@ public sealed class LinuxLanEngine : IAsyncDisposable
         resolvingNames.Clear();
         learnedHostNames.Clear();
         registry.BeginSession();
+        identityMonitor.Reset();
+        foreach (var hint in knownDeviceHints.Where(hint => hint.LastKnownIp is not null))
+        {
+            registry.Remember(
+                hint.LastKnownIp!,
+                hint.MacAddress,
+                hint.LastSeenUtc ?? DateTimeOffset.MinValue,
+                hint.HostName);
+        }
+
         restoring = false;
         backgroundFailure = null;
         Interlocked.Exchange(ref forwardedPacketCount, 0);
@@ -223,32 +231,14 @@ public sealed class LinuxLanEngine : IAsyncDisposable
         {
             var activeProfile = profile ??
                 throw new InvalidOperationException("Start an adapter before refreshing devices.");
-            var replies = new ConcurrentDictionary<IPAddress, PhysicalAddress>();
-            var knownReplies = new ConcurrentDictionary<string, IPAddress>(
-                StringComparer.OrdinalIgnoreCase);
-            activeProbeReplies = replies;
-            activeKnownDeviceReplies = knownReplies;
-            int probes;
-            try
-            {
-                probes = await ProbeCachedNeighborsAsync(
-                    activeProfile,
-                    cancellationToken);
-                probes += await ProbeSubnetAsync(activeProfile, cancellationToken);
-                var cached = await LinuxArpCache.ReadAsync(
-                    activeProfile.Name,
-                    activeProfile.LocalAddress,
-                    activeProfile.PrefixLength,
-                    cancellationToken);
-                _ = ImportCachedNeighbors(activeProfile, cached);
-            }
-            finally
-            {
-                activeProbeReplies = null;
-                activeKnownDeviceReplies = null;
-            }
+            var cached = await LinuxArpCache.ReadAsync(
+                activeProfile.Name,
+                activeProfile.LocalAddress,
+                activeProfile.PrefixLength,
+                cancellationToken);
+            var imported = ImportCachedNeighbors(activeProfile, cached);
 
-            return new DiscoveryRefreshResult(probes, replies.Count, clients.Count);
+            return new DiscoveryRefreshResult(imported, registry.Peek().Count);
         }
         finally
         {
@@ -380,108 +370,6 @@ public sealed class LinuxLanEngine : IAsyncDisposable
         await StopAsync();
         GC.SuppressFinalize(this);
     }
-
-    private async Task<int> ProbeSubnetAsync(
-        AdapterProfile activeProfile,
-        CancellationToken cancellationToken)
-    {
-        var probes = 0;
-        var hints = knownDeviceHints
-            .Where(hint => !hint.MacAddress.Equals(activeProfile.LocalMac))
-            .ToArray();
-
-        // First retry remembered IP/MAC pairs. Sleeping Wi-Fi clients often
-        // answer a directed ARP even when an access point suppresses broadcast
-        // ARP between wired and wireless stations.
-        foreach (var hint in hints.Where(hint => hint.LastKnownIp is not null))
-        {
-            SendArpPacket(EthernetFrameCodec.BuildUnicastArpRequest(
-                activeProfile.LocalMac,
-                activeProfile.LocalAddress,
-                hint.MacAddress,
-                hint.LastKnownIp!));
-            probes++;
-        }
-
-        if (hints.Any(hint => hint.LastKnownIp is not null))
-        {
-            await Task.Delay(TimeSpan.FromMilliseconds(150), cancellationToken);
-        }
-
-        foreach (var address in IPv4DiscoveryRange.EnumerateHosts(
-                     activeProfile.LocalAddress,
-                     activeProfile.PrefixLength))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!address.Equals(activeProfile.GatewayAddress))
-            {
-                SendArpPacket(EthernetFrameCodec.BuildArpRequest(
-                    activeProfile.LocalMac,
-                    activeProfile.LocalAddress,
-                    address));
-                probes++;
-
-                // Match the Windows discovery path: for a remembered MAC whose
-                // address changed, also try every candidate IP as a unicast ARP.
-                // This crosses consumer AP bridges that hide broadcast probes.
-                foreach (var hint in hints)
-                {
-                    var key = TrafficPolicy.NormalizeMac(hint.MacAddress.ToString());
-                    if (activeKnownDeviceReplies?.ContainsKey(key) == true ||
-                        Equals(hint.LastKnownIp, address))
-                    {
-                        continue;
-                    }
-
-                    SendArpPacket(EthernetFrameCodec.BuildUnicastArpRequest(
-                        activeProfile.LocalMac,
-                        activeProfile.LocalAddress,
-                        hint.MacAddress,
-                        address));
-                    probes++;
-                }
-            }
-
-            await Task.Delay(ProbeInterval, cancellationToken);
-        }
-
-        await Task.Delay(ProbeReplyWindow, cancellationToken);
-        return probes;
-    }
-
-    private async Task<int> ProbeCachedNeighborsAsync(
-        AdapterProfile activeProfile,
-        CancellationToken cancellationToken)
-    {
-        var cached = await LinuxArpCache.ReadAsync(
-            activeProfile.Name,
-            activeProfile.LocalAddress,
-            activeProfile.PrefixLength,
-            cancellationToken);
-        var probes = 0;
-        foreach (var entry in cached)
-        {
-            if (entry.Address.Equals(activeProfile.GatewayAddress))
-            {
-                continue;
-            }
-
-            SendArpPacket(EthernetFrameCodec.BuildUnicastArpRequest(
-                activeProfile.LocalMac,
-                activeProfile.LocalAddress,
-                entry.MacAddress,
-                entry.Address));
-            probes++;
-        }
-
-        if (probes > 0)
-        {
-            await Task.Delay(TimeSpan.FromMilliseconds(150), cancellationToken);
-        }
-
-        return probes;
-    }
-
     private int ImportCachedNeighbors(
         AdapterProfile activeProfile,
         IReadOnlyList<LinuxArpCacheEntry> cached)
@@ -489,39 +377,34 @@ public sealed class LinuxLanEngine : IAsyncDisposable
         var imported = 0;
         foreach (var entry in cached)
         {
-            if (entry.Address.Equals(activeProfile.GatewayAddress))
-            {
-                registry.Observe(
-                    entry.Address,
-                    entry.MacAddress,
-                    DateTimeOffset.UtcNow,
-                    "Gateway");
-                continue;
-            }
-
-            // A peer mapped to this computer's MAC is stale interception state,
-            // not a real client identity. Importing it creates duplicate entries
-            // named after the controller and can poison the wrong host.
             if (entry.MacAddress.Equals(activeProfile.LocalMac))
             {
+                var observation = identityMonitor.Observe(
+                    new ArpFrameInfo(
+                        ArpOperation.Reply,
+                        activeProfile.LocalMac,
+                        activeProfile.LocalMac,
+                        entry.Address,
+                        PhysicalAddress.None,
+                        activeProfile.LocalAddress),
+                    activeProfile.LocalAddress,
+                    activeProfile.LocalMac,
+                    DateTimeOffset.UtcNow);
+                if (observation.Warning is not null)
+                {
+                    IdentityAlertDetected?.Invoke(this, observation.Warning);
+                }
+
                 continue;
             }
 
-            var changed = clientMappings.Upsert(entry.Address, entry.MacAddress);
-            frameRouter?.UpdateClient(entry.Address, entry.MacAddress);
+            // Neighbor cache records can be stale. Keep them as offline inventory
+            // only; do not turn a cache entry into a forwarding/interception target.
             registry.Remember(
                 entry.Address,
                 entry.MacAddress,
-                DateTimeOffset.UtcNow,
+                DateTimeOffset.MinValue,
                 GetKnownHostName(entry.MacAddress));
-            _ = ResolveNameAsync(entry.Address, entry.MacAddress);
-            if (controlling && changed)
-            {
-                PoisonClient(new KeyValuePair<IPAddress, PhysicalAddress>(
-                    entry.Address,
-                    entry.MacAddress));
-            }
-
             imported++;
         }
 
@@ -545,9 +428,25 @@ public sealed class LinuxLanEngine : IAsyncDisposable
     private void ObserveArp(ArpFrameInfo arp)
     {
         var activeProfile = profile;
-        if (activeProfile is null ||
+        if (activeProfile is null)
+        {
+            return;
+        }
+
+        var identity = identityMonitor.Observe(
+            arp,
+            activeProfile.LocalAddress,
+            activeProfile.LocalMac,
+            DateTimeOffset.UtcNow);
+        if (identity.Warning is not null)
+        {
+            IdentityAlertDetected?.Invoke(this, identity.Warning);
+        }
+
+        if (identity.IsConflict ||
             !arp.HasConsistentSender ||
             arp.SenderIp.Equals(IPAddress.Any) ||
+            arp.SenderIp.Equals(activeProfile.LocalAddress) ||
             arp.SenderMac.Equals(activeProfile.LocalMac) ||
             IsZeroOrBroadcast(arp.SenderMac))
         {
@@ -562,10 +461,6 @@ public sealed class LinuxLanEngine : IAsyncDisposable
         }
 
         var changed = clientMappings.Upsert(arp.SenderIp, arp.SenderMac);
-        activeProbeReplies?.TryAdd(arp.SenderIp, arp.SenderMac);
-        activeKnownDeviceReplies?.TryAdd(
-            TrafficPolicy.NormalizeMac(arp.SenderMac.ToString()),
-            arp.SenderIp);
         frameRouter?.UpdateClient(arp.SenderIp, arp.SenderMac);
         registry.Observe(
             arp.SenderIp,
@@ -769,19 +664,7 @@ public sealed class LinuxLanEngine : IAsyncDisposable
     private async Task RunMaintenanceAsync(CancellationToken cancellationToken)
     {
         using var poisonTimer = new PeriodicTimer(TimeSpan.FromSeconds(5));
-        using var probeTimer = new PeriodicTimer(TimeSpan.FromSeconds(5));
-        var poisonTask = RunTimerAsync(poisonTimer, PoisonClients, cancellationToken);
-        var probeTask = RunTimerAsync(
-            probeTimer,
-            () =>
-            {
-                if (profile is { } activeProfile)
-                {
-                    ProbeKnownClients(activeProfile);
-                }
-            },
-            cancellationToken);
-        await Task.WhenAll(poisonTask, probeTask);
+        await RunTimerAsync(poisonTimer, PoisonClients, cancellationToken);
     }
 
     private static async Task RunTimerAsync(
@@ -794,19 +677,6 @@ public sealed class LinuxLanEngine : IAsyncDisposable
             action();
         }
     }
-
-    private void ProbeKnownClients(AdapterProfile activeProfile)
-    {
-        foreach (var client in clients)
-        {
-            SendArpPacket(EthernetFrameCodec.BuildUnicastArpRequest(
-                activeProfile.LocalMac,
-                activeProfile.LocalAddress,
-                client.Value,
-                client.Key));
-        }
-    }
-
     private void PoisonClients()
     {
         if (!controlling || restoring)
@@ -853,7 +723,9 @@ public sealed class LinuxLanEngine : IAsyncDisposable
         }
 
         if (request.TargetIp.Equals(activeProfile.GatewayAddress) &&
-            clients.TryGetValue(request.SenderIp, out var clientMac))
+            clients.TryGetValue(request.SenderIp, out var clientMac) &&
+            policy.GetInterceptionTargets(clientMac.ToString())
+                .HasFlag(InterceptionTargets.Client))
         {
             SendArpPacket(ArpInterceptionFrames.BuildPoison(
                 activeProfile.LocalMac,
@@ -863,7 +735,9 @@ public sealed class LinuxLanEngine : IAsyncDisposable
                 clientMac).ToClient);
         }
         else if (request.SenderIp.Equals(activeProfile.GatewayAddress) &&
-                 clients.TryGetValue(request.TargetIp, out var requestedMac))
+                 clients.TryGetValue(request.TargetIp, out var requestedMac) &&
+                 policy.GetInterceptionTargets(requestedMac.ToString())
+                    .HasFlag(InterceptionTargets.Gateway))
         {
             SendArpPacket(ArpInterceptionFrames.BuildPoison(
                 activeProfile.LocalMac,
