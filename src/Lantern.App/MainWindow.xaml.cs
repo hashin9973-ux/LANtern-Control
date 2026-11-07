@@ -311,6 +311,7 @@ public partial class MainWindow : Window
         }
 
         var previousInterval = settings.AutoScanIntervalSeconds;
+        var previousDirtyState = settingsDirty;
         settings.AutoScanIntervalSeconds = intervalSeconds;
         settingsDirty = true;
         try
@@ -326,6 +327,7 @@ public partial class MainWindow : Window
         catch (IOException exception)
         {
             settings.AutoScanIntervalSeconds = previousInterval;
+            settingsDirty = previousDirtyState;
             AutoScanIntervalTextBox.Text = previousInterval.ToString();
             SetStatus(exception.Message, false);
         }
