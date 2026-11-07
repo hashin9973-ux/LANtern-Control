@@ -9,7 +9,7 @@ $publishDirectory = Join-Path $projectRoot "release"
 $installerProject = Join-Path $projectRoot "installer\LanternControl.wixproj"
 $installerVerification = Join-Path $projectRoot "scripts\verify-msi-installer.ps1"
 $projectFile = Join-Path $projectRoot "src\Lantern.App\Lantern.App.csproj"
-$releaseVersion = "0.1.9"
+$releaseVersion = "0.1.10"
 
 $testProjects = @(
     "tests\Lantern.Core.Tests\Lantern.Core.Tests.csproj",
