@@ -240,4 +240,11 @@ public sealed class DeviceProbePolicyTests
         Assert.True(targets.Count <= DeviceProbePolicy.MaxDiscoveryTargetsPerScan);
         Assert.Equal(252, targets.Count);
     }
+
+    [Fact]
+    public void DiscoveryRetrySpacing_IsPaced()
+    {
+        Assert.Equal(TimeSpan.FromMilliseconds(150), DeviceProbePolicy.DiscoveryRetrySpacing);
+    }
+
 }
