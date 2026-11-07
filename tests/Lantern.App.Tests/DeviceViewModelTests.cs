@@ -129,9 +129,9 @@ public sealed class DeviceViewModelTests
                     var sidebarVersion = Assert.IsType<TextBlock>(
                         window.FindName("SidebarVersionText"));
                     Assert.Equal("v0.1.5", sidebarVersion.Text);
-                    var deviceGrid = Assert.IsType<DataGrid>(window.FindName("DeviceGrid"));
+                    var listLayoutGrid = Assert.IsType<DataGrid>(window.FindName("DeviceGrid"));
                     Assert.True(
-                        double.IsPositiveInfinity(deviceGrid.MaxHeight),
+                        double.IsPositiveInfinity(listLayoutGrid.MaxHeight),
                         "The device list must not be trapped in a fixed-height internal viewport.");
                     Assert.NotNull(window.FindName("ClearDeviceCacheButton"));
 
