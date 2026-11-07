@@ -826,12 +826,6 @@ public partial class MainWindow : Window
                 var macAddress = PhysicalAddress.Parse(device.MacKey);
                 engine.ForgetDevice(macAddress);
                 registry.Remove(macAddress);
-                if (settings.Devices.TryGetValue(device.MacKey, out var preferences))
-                {
-                    preferences.LastKnownIp = null;
-                    preferences.LastSeenUtc = null;
-                }
-
                 devicesByMac.Remove(device.MacKey);
                 Devices.Remove(device);
             }
