@@ -408,9 +408,10 @@ public partial class MainWindow : Window
             return;
         }
 
-        settings.ScriptAutomationPath = Path.GetFullPath(dialog.FileName);
+        var selectedPath = Path.GetFullPath(dialog.FileName);
+        settings.ScriptAutomationPath = selectedPath;
         settings.ScriptAutomationEnabled = false;
-        ScriptPathTextBox.Text = settings.ScriptAutomationPath;
+        ScriptPathTextBox.Text = selectedPath;
         ScriptAutomationCheckBox.IsChecked = false;
         ConfigureScriptAutomationTimer();
         try
