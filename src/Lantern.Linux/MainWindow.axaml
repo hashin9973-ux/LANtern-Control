@@ -589,7 +589,10 @@
                 <Grid RowDefinitions="Auto,Auto,Auto">
                   <Grid Margin="20,17" ColumnDefinitions="*,Auto">
                     <StackPanel><TextBlock Text="NETWORK CLIENTS" Classes="eyebrow" Foreground="#A89095"/><TextBlock Text="Connected devices" FontSize="18" FontWeight="Bold" Margin="0,4,0,0"/></StackPanel>
-                    <TextBlock x:Name="DeviceCountLabel" Grid.Column="1" VerticalAlignment="Center" Foreground="#A89095" />
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Spacing="12">
+                      <Button x:Name="ClearDeviceCacheButton" Classes="action" Content="Clear device cache" Click="ClearDeviceCacheButton_OnClick" ToolTip.Tip="Remove offline devices from the list. Saved names and rules are preserved." />
+                      <TextBlock x:Name="DeviceCountLabel" VerticalAlignment="Center" Foreground="#A89095" />
+                    </StackPanel>
                   </Grid>
                   <Grid Grid.Row="1" Height="42" Background="#0C0B0D" ColumnDefinitions="2.2*,1.25*,1*,1*,1.25*,1.25*,1.05*">
                     <TextBlock Margin="20,0,0,0" Text="DEVICE" VerticalAlignment="Center" Classes="eyebrow" Foreground="#A89095"/><TextBlock Grid.Column="1" Text="IP ADDRESS" VerticalAlignment="Center" Classes="eyebrow" Foreground="#A89095"/><TextBlock Grid.Column="2" Text="DOWNLOAD" VerticalAlignment="Center" Classes="eyebrow" Foreground="#A89095"/><TextBlock Grid.Column="3" Text="UPLOAD" VerticalAlignment="Center" Classes="eyebrow" Foreground="#A89095"/><TextBlock Grid.Column="4" Text="DOWN LIMIT" VerticalAlignment="Center" Classes="eyebrow" Foreground="#A89095"/><TextBlock Grid.Column="5" Text="UP LIMIT" VerticalAlignment="Center" Classes="eyebrow" Foreground="#A89095"/><TextBlock Grid.Column="6" Text="INTERNET" VerticalAlignment="Center" Classes="eyebrow" Foreground="#A89095"/>
@@ -607,7 +610,7 @@
                               <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                 <TextBox Classes="device-name" Text="{Binding EditableName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Height="18" Cursor="Arrow" FontWeight="SemiBold" IsVisible="{Binding CanControl}" />
                                 <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" Foreground="#A89095" IsVisible="{Binding IsProtected}" />
-                                <StackPanel Orientation="Horizontal" Spacing="8"><TextBlock Text="{Binding MacAddress}" FontSize="9" Foreground="#A89095"/><TextBlock Text="{Binding ProtectedReason}" FontSize="9" Foreground="#D72C43"/></StackPanel>
+                                <StackPanel Orientation="Horizontal" Spacing="8"><TextBlock Text="{Binding MacAddress}" FontSize="11" Foreground="#A89095"/><TextBlock Text="{Binding ProtectedReason}" FontSize="9" Foreground="#D72C43"/></StackPanel>
                               </StackPanel>
                             </Grid>
                             <TextBlock Grid.Column="1" Text="{Binding IpAddress}" VerticalAlignment="Center" />
