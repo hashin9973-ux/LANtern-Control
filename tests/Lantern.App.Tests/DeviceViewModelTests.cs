@@ -128,7 +128,7 @@ public sealed class DeviceViewModelTests
 
                     var sidebarVersion = Assert.IsType<TextBlock>(
                         window.FindName("SidebarVersionText"));
-                    Assert.Equal("v0.1.3", sidebarVersion.Text);
+                    Assert.Equal("v0.1.4", sidebarVersion.Text);
 
                     var minimizeButton = Assert.IsType<Button>(
                         window.FindName("MinimizeWindowButton"));
