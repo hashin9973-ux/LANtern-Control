@@ -100,14 +100,7 @@ public sealed class LinuxLanEngine : IAsyncDisposable
         learnedHostNames.Clear();
         registry.BeginSession();
         identityMonitor.Reset();
-        foreach (var hint in knownDeviceHints.Where(hint => hint.LastKnownIp is not null))
-        {
-            registry.Remember(
-                hint.LastKnownIp!,
-                hint.MacAddress,
-                hint.LastSeenUtc ?? DateTimeOffset.MinValue,
-                hint.HostName);
-        }
+        SeedRememberedInventory();
 
         restoring = false;
         backgroundFailure = null;
@@ -223,26 +216,47 @@ public sealed class LinuxLanEngine : IAsyncDisposable
         }
     }
 
-    public async Task<DiscoveryRefreshResult> RefreshNeighborsAsync(
+    public Task<DiscoveryRefreshResult> RefreshNeighborsAsync(
         CancellationToken cancellationToken = default)
     {
+        var activeProfile = profile ??
+            throw new InvalidOperationException("Select an adapter before scanning devices.");
+        return ScanDevicesAsync(activeProfile, cancellationToken);
+    }
+
+    public async Task<DiscoveryRefreshResult> ScanDevicesAsync(
+        AdapterProfile selectedAdapter,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(selectedAdapter);
         await refreshSync.WaitAsync(cancellationToken);
         try
         {
-            var activeProfile = profile ??
-                throw new InvalidOperationException("Start an adapter before refreshing devices.");
+            SeedRememberedInventory();
             var cached = await LinuxArpCache.ReadAsync(
-                activeProfile.Name,
-                activeProfile.LocalAddress,
-                activeProfile.PrefixLength,
+                selectedAdapter.Name,
+                selectedAdapter.LocalAddress,
+                selectedAdapter.PrefixLength,
                 cancellationToken);
-            var imported = ImportCachedNeighbors(activeProfile, cached);
+            var imported = ImportCachedNeighbors(selectedAdapter, cached);
 
             return new DiscoveryRefreshResult(imported, registry.Peek().Count);
         }
         finally
         {
             refreshSync.Release();
+        }
+    }
+
+    private void SeedRememberedInventory()
+    {
+        foreach (var hint in knownDeviceHints.Where(hint => hint.LastKnownIp is not null))
+        {
+            registry.Remember(
+                hint.LastKnownIp!,
+                hint.MacAddress,
+                hint.LastSeenUtc ?? DateTimeOffset.MinValue,
+                hint.HostName);
         }
     }
 
@@ -377,6 +391,16 @@ public sealed class LinuxLanEngine : IAsyncDisposable
         var imported = 0;
         foreach (var entry in cached)
         {
+            if (entry.Address.Equals(activeProfile.GatewayAddress))
+            {
+                registry.Remember(
+                    entry.Address,
+                    entry.MacAddress,
+                    DateTimeOffset.MinValue,
+                    "Gateway");
+                continue;
+            }
+
             if (entry.MacAddress.Equals(activeProfile.LocalMac))
             {
                 var observation = identityMonitor.Observe(
