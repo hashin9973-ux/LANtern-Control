@@ -226,6 +226,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             var probesSent = 0;
             var devicesResponded = 0;
             var retryRequestsSent = 0;
+            var candidateHosts = 0;
             string? probeWarning = null;
             try
             {
@@ -237,6 +238,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 probesSent = probeResult.RequestsSent;
                 devicesResponded = probeResult.DevicesResponded;
                 retryRequestsSent = probeResult.RetryRequestsSent;
+                candidateHosts = probeResult.CandidateHosts;
             }
             catch (Exception exception) when (
                 !IsRunning && exception is not OperationCanceledException)
@@ -250,7 +252,8 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 probesSent,
                 probeWarning,
                 devicesResponded,
-                retryRequestsSent);
+                retryRequestsSent,
+                candidateHosts);
         }
         finally
         {
@@ -444,7 +447,8 @@ public sealed class PcapLanEngine : IAsyncDisposable
             return new DiscoveryProbeResult(
                 firstPassSent + retrySent,
                 retrySent,
-                responders.Count);
+                responders.Count,
+                discoverSubnet ? targets.Count : 0);
         }
 
         if (arpDevice is not null)
