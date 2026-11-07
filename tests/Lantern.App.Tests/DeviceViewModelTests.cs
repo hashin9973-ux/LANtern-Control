@@ -50,6 +50,9 @@ public sealed class DeviceViewModelTests
         Assert.Contains("[System.Windows.Automation.ValuePattern]::Pattern", script, StringComparison.Ordinal);
         Assert.Contains("[System.Windows.Automation.TogglePattern]::Pattern", script, StringComparison.Ordinal);
         Assert.Contains("# Set-LanternPaused -AutomationId $PauseAutomationId -Paused $true", script, StringComparison.Ordinal);
+        Assert.Contains("$OverviewInvokePattern.Invoke()", script, StringComparison.Ordinal);
+        Assert.Contains("[System.Windows.Automation.ScrollPattern]::Pattern", script, StringComparison.Ordinal);
+        Assert.Contains("[System.Windows.Automation.ScrollAmount]::LargeIncrement", script, StringComparison.Ordinal);
 
         viewModel.EditableName = "Renamed device";
 
