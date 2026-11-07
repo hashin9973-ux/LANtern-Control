@@ -39,13 +39,23 @@ public sealed class DeviceViewModelTests
         Assert.Equal("download_limit_AABBCCDDEEFF", viewModel.DownloadLimitAutomationId);
         Assert.Equal("upload_limit_AABBCCDDEEFF", viewModel.UploadLimitAutomationId);
         Assert.Equal("pause_AABBCCDDEEFF", viewModel.PauseAutomationId);
-        Assert.Equal("copy_ids_AABBCCDDEEFF", viewModel.CopyAutomationIdsButtonAutomationId);
+        Assert.Equal("copy_script_AABBCCDDEEFF", viewModel.CopyAutomationScriptButtonAutomationId);
+
+        var script = Lantern.App.Services.DeviceAutomationScriptBuilder.Build(viewModel);
+        Assert.Contains("$DeviceRowAutomationId = 'device_AABBCCDDEEFF'", script, StringComparison.Ordinal);
+        Assert.Contains("$DeviceNameAutomationId = 'device_name_AABBCCDDEEFF'", script, StringComparison.Ordinal);
+        Assert.Contains("$DownloadLimitAutomationId = 'download_limit_AABBCCDDEEFF'", script, StringComparison.Ordinal);
+        Assert.Contains("$UploadLimitAutomationId = 'upload_limit_AABBCCDDEEFF'", script, StringComparison.Ordinal);
+        Assert.Contains("$PauseAutomationId = 'pause_AABBCCDDEEFF'", script, StringComparison.Ordinal);
+        Assert.Contains("[System.Windows.Automation.ValuePattern]::Pattern", script, StringComparison.Ordinal);
+        Assert.Contains("[System.Windows.Automation.TogglePattern]::Pattern", script, StringComparison.Ordinal);
+        Assert.Contains("# Set-LanternPaused -AutomationId $PauseAutomationId -Paused $true", script, StringComparison.Ordinal);
 
         viewModel.EditableName = "Renamed device";
 
         Assert.Equal(rowAutomationId, viewModel.RowAutomationId);
         Assert.Equal("pause_AABBCCDDEEFF", viewModel.PauseAutomationId);
-        Assert.Equal("copy_ids_AABBCCDDEEFF", viewModel.CopyAutomationIdsButtonAutomationId);
+        Assert.Equal("copy_script_AABBCCDDEEFF", viewModel.CopyAutomationScriptButtonAutomationId);
     }
 
     [Fact]
@@ -137,6 +147,7 @@ public sealed class DeviceViewModelTests
                         "OverviewNavButton",
                         "ActivityNavButton",
                         "DomainRulesNavButton",
+                        "ScriptAutomationNavButton",
                         "AdapterStrip",
                         "MetricsPanel",
                         "ConnectedDevicesMetric",
@@ -243,9 +254,12 @@ public sealed class DeviceViewModelTests
                         window.FindName("WebsiteActivitySection"));
                     var domainRulesSection = Assert.IsType<Border>(
                         window.FindName("DomainRulesSection"));
+                    var scriptAutomationSection = Assert.IsType<Border>(
+                        window.FindName("ScriptAutomationSection"));
                     Assert.Equal(Visibility.Visible, overviewSection.Visibility);
                     Assert.Equal(Visibility.Collapsed, websiteSection.Visibility);
                     Assert.Equal(Visibility.Collapsed, domainRulesSection.Visibility);
+                    Assert.Equal(Visibility.Collapsed, scriptAutomationSection.Visibility);
 
                     var activityNav = Assert.IsType<Button>(window.FindName("ActivityNavButton"));
                     activityNav.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -263,6 +277,15 @@ public sealed class DeviceViewModelTests
                     Assert.Equal(Visibility.Collapsed, overviewSection.Visibility);
                     Assert.Equal(Visibility.Collapsed, websiteSection.Visibility);
                     Assert.Equal(Visibility.Visible, domainRulesSection.Visibility);
+                    Assert.Equal(Visibility.Collapsed, scriptAutomationSection.Visibility);
+
+                    var scriptAutomationNav = Assert.IsType<Button>(
+                        window.FindName("ScriptAutomationNavButton"));
+                    scriptAutomationNav.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    Assert.Equal(Visibility.Collapsed, overviewSection.Visibility);
+                    Assert.Equal(Visibility.Collapsed, websiteSection.Visibility);
+                    Assert.Equal(Visibility.Collapsed, domainRulesSection.Visibility);
+                    Assert.Equal(Visibility.Visible, scriptAutomationSection.Visibility);
 
                     var presetSelector = Assert.IsType<ComboBox>(
                         window.FindName("DomainPresetSelector"));
@@ -315,16 +338,16 @@ public sealed class DeviceViewModelTests
                     Assert.Equal(18, deviceNameEditor.MinHeight);
                     Assert.Equal(new Thickness(0), deviceNameEditor.Margin);
                     Assert.Equal(new Thickness(0), deviceNameEditor.Padding);
-                    var copyAutomationIdsButton = Assert.IsType<Button>(
-                        deviceIdentity.FindName("CopyAutomationIdsButton"));
-                    Assert.Equal("Copy IDs", copyAutomationIdsButton.Content);
-                    var copyAutomationIdsBinding = Assert.IsType<Binding>(
+                    var copyAutomationScriptButton = Assert.IsType<Button>(
+                        deviceIdentity.FindName("CopyAutomationScriptButton"));
+                    Assert.Equal("Copy script", copyAutomationScriptButton.Content);
+                    var copyAutomationScriptBinding = Assert.IsType<Binding>(
                         BindingOperations.GetBinding(
-                            copyAutomationIdsButton,
+                            copyAutomationScriptButton,
                             System.Windows.Automation.AutomationProperties.AutomationIdProperty));
                     Assert.Equal(
-                        "CopyAutomationIdsButtonAutomationId",
-                        copyAutomationIdsBinding.Path.Path);
+                        "CopyAutomationScriptButtonAutomationId",
+                        copyAutomationScriptBinding.Path.Path);
                     var scriptEditor = Assert.IsType<TextBox>(
                         window.FindName("ScriptEditorTextBox"));
                     Assert.True(scriptEditor.AcceptsReturn);
