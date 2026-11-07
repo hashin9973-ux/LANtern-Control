@@ -278,11 +278,9 @@ public partial class MainWindow : Window
             await settingsStore.SaveAsync(settings);
             settingsDirty = false;
             ConfigureAutoScanTimer();
-            SetStatus(
-                enabled
-                    ? $"Automatic device discovery enabled: a full scan runs every {settings.AutoScanIntervalSeconds} seconds."
-                    : "Automatic device discovery disabled.",
-                engine.IsRunning);
+            DetailStatusText.Text = enabled
+                ? $"Automatic device discovery enabled: a full scan runs every {settings.AutoScanIntervalSeconds} seconds."
+                : "Automatic device discovery disabled.";
         }
         catch (IOException exception)
         {
