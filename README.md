@@ -284,8 +284,9 @@ identifiers are derived from its MAC address rather than its sorted row number
 or display name, so they remain stable when the list is reordered. Inventory-only
 devices without a verified MAC cannot be controlled. Scripts are separate
 PowerShell processes and use Windows UI Automation to interact with controls
-exposed by LANtern; the device row must be visible in the device list when the
-script starts.
+exposed by LANtern; the generated script returns to Overview and attempts to
+scroll the device list until the row is visible. If it cannot expose the row,
+scroll to that device manually and rerun the script.
 
 ## Domain visibility and blocking
 
