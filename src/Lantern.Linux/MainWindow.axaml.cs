@@ -25,7 +25,7 @@ public partial class MainWindow : Window
     {
         Timeout = TimeSpan.FromSeconds(8),
     };
-    private static readonly TimeSpan OfflineRetention = TimeSpan.FromSeconds(45);
+    private static readonly TimeSpan OfflineRetention = TimeSpan.FromDays(30);
     private static readonly IBrush ActiveBrush = new SolidColorBrush(Color.Parse("#68C08A"));
     private static readonly IBrush IdleBrush = new SolidColorBrush(Color.Parse("#A89095"));
     private static readonly IBrush AccentBrush = new SolidColorBrush(Color.Parse("#D72C43"));
@@ -72,6 +72,7 @@ public partial class MainWindow : Window
         engine.StateChanged += Engine_OnStateChanged;
         engine.DeviceIdentityLearned += Engine_OnDeviceIdentityLearned;
         engine.DeviceDomainObserved += Engine_OnDeviceDomainObserved;
+        engine.IdentityAlertDetected += Engine_OnIdentityAlertDetected;
 
         refreshTimer = new DispatcherTimer { Interval = TrafficSamplingProfile.Interval };
         refreshTimer.Tick += RefreshTimer_OnTick;
@@ -194,6 +195,7 @@ public partial class MainWindow : Window
             startedAt = DateTimeOffset.UtcNow;
             SetActiveState(true);
             RefreshDashboard();
+            await settingsStore.SaveAsync(settings);
         }
         catch (Exception exception)
         {
@@ -218,7 +220,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (busy || !engine.IsRunning)
+        if (busy || AdapterSelector.SelectedItem is not AdapterProfile adapter)
         {
             return;
         }
@@ -228,14 +230,15 @@ public partial class MainWindow : Window
         try
         {
             UpdateKnownDeviceHints();
-            SetStatus("Sweeping the local subnet...");
-            var result = await engine.RefreshNeighborsAsync();
-            SetStatus(result.StatusMessage);
+            SetStatus("Reading the local neighbor cache and saved device history...");
+            var result = await engine.ScanDevicesAsync(adapter);
             RefreshDashboard();
+            await settingsStore.SaveAsync(settings);
+            SetStatus(result.StatusMessage);
         }
         catch (Exception exception)
         {
-            SetStatus($"Device refresh failed: {exception.Message}");
+            SetStatus($"Device scan failed: {exception.Message}");
         }
         finally
         {
@@ -270,6 +273,8 @@ public partial class MainWindow : Window
             await engine.StopAsync();
             startedAt = null;
             SetActiveState(false);
+            RefreshDashboard();
+            await settingsStore.SaveAsync(settings);
         }
         catch (Exception exception)
         {
@@ -298,7 +303,8 @@ public partial class MainWindow : Window
         var now = DateTimeOffset.UtcNow;
         var snapshots = registry.TakeSnapshot(now)
             .Where(snapshot => IsGateway(snapshot) ||
-                (snapshot.LastSeen != DateTimeOffset.MinValue && now - snapshot.LastSeen <= OfflineRetention))
+                snapshot.LastSeen == DateTimeOffset.MinValue ||
+                now - snapshot.LastSeen <= OfflineRetention)
             .OrderBy(snapshot => IsGateway(snapshot) ? 1 : 0)
             .ThenBy(snapshot => Ipv4SortKey(snapshot.IpAddress))
             .ToArray();
@@ -309,6 +315,16 @@ public partial class MainWindow : Window
             var macKey = TrafficPolicy.NormalizeMac(snapshot.MacAddress.ToString());
             visibleKeys.Add(macKey);
             settings.Devices.TryGetValue(macKey, out var preferences);
+            if (!IsGateway(snapshot) && snapshot.LastSeen != DateTimeOffset.MinValue)
+            {
+                preferences ??= settings.Devices[macKey] = new DevicePreferences();
+                preferences.LastKnownIp = snapshot.IpAddress.ToString();
+                if (preferences.LastSeenUtc is null || snapshot.LastSeen > preferences.LastSeenUtc)
+                {
+                    preferences.LastSeenUtc = snapshot.LastSeen;
+                }
+            }
+
             if (!devicesByMac.TryGetValue(macKey, out var device))
             {
                 device = new DeviceViewModel(OnDeviceRuleChangedAsync);
@@ -324,7 +340,10 @@ public partial class MainWindow : Window
                 device.Update(snapshot, preferences?.Alias);
             }
 
-            device.SetPresence(true);
+            var presence = IsGateway(snapshot)
+                ? DevicePresence.Online
+                : DevicePresencePolicy.Classify(snapshot.LastSeen, now);
+            device.SetPresence(presence == DevicePresence.Online);
         }
 
         SyncDevices(snapshots.Select(snapshot =>
@@ -443,6 +462,9 @@ public partial class MainWindow : Window
 
     private void Engine_OnStatusChanged(object? sender, string message) =>
         Dispatcher.UIThread.Post(() => SetStatus(message));
+
+    private void Engine_OnIdentityAlertDetected(object? sender, string warning) =>
+        Dispatcher.UIThread.Post(() => SetStatus(warning));
 
     private void Engine_OnStateChanged(object? sender, LinuxEngineStateChangedEventArgs eventArgs) =>
         Dispatcher.UIThread.Post(() =>
@@ -849,11 +871,11 @@ public partial class MainWindow : Window
         }
 
         StartButton.IsEnabled = !busy && !engine.IsRunning && AdapterSelector.SelectedItem is AdapterProfile;
-        RefreshButton.IsEnabled = !busy && engine.IsRunning;
+        RefreshButton.IsEnabled = !busy && AdapterSelector.SelectedItem is AdapterProfile;
         StopButton.IsEnabled = !busy && engine.IsRunning;
         AdapterSelector.IsEnabled = !busy && !engine.IsRunning;
         StartButton.IsVisible = !engine.IsRunning;
-        RefreshButton.IsVisible = engine.IsRunning;
+        RefreshButton.IsVisible = AdapterSelector.SelectedItem is AdapterProfile;
         StopButton.IsVisible = engine.IsRunning;
     }
 
