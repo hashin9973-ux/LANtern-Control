@@ -18,6 +18,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private readonly DeviceRegistry registry;
     private readonly ClientMappingCache clientMappings = new();
     private readonly ArpIdentityMonitor identityMonitor = new();
+    private readonly ConcurrentDictionary<IPAddress, DateTimeOffset> lastPresenceProbeAt = new();
     private readonly ResolvedDeviceNameClaims resolvedNameClaims = new(Dns.GetHostName());
     private readonly ConcurrentDictionary<string, byte> resolvingNames =
         new(StringComparer.OrdinalIgnoreCase);
@@ -71,6 +72,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
         foreach (var address in clientMappings.RemoveByMac(macAddress))
         {
             frameRouter?.RemoveClient(address);
+            lastPresenceProbeAt.TryRemove(address, out _);
         }
     }
 
@@ -320,7 +322,8 @@ public sealed class PcapLanEngine : IAsyncDisposable
             registry.Peek(),
             activeProfile,
             DateTimeOffset.UtcNow,
-            force);
+            force,
+            lastPresenceProbeAt);
         if (targets.Count == 0)
         {
             return 0;
@@ -329,7 +332,11 @@ public sealed class PcapLanEngine : IAsyncDisposable
         if (arpDevice is not null)
         {
             return await SendPresenceProbesAsync(
-                SendArpPacket,
+                (address, bytes) =>
+                {
+                    SendArpPacket(bytes);
+                    lastPresenceProbeAt[address] = DateTimeOffset.UtcNow;
+                },
                 activeProfile,
                 targets,
                 cancellationToken);
@@ -356,12 +363,14 @@ public sealed class PcapLanEngine : IAsyncDisposable
             captureStarted = true;
 
             return await SendPresenceProbesAsync(
-                bytes =>
+                (address, bytes) =>
                 {
                     lock (arpSendSync)
                     {
                         captureDevice.SendPacket(bytes);
                     }
+
+                    lastPresenceProbeAt[address] = DateTimeOffset.UtcNow;
                 },
                 activeProfile,
                 targets,
@@ -393,7 +402,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
     }
 
     private static async Task<int> SendPresenceProbesAsync(
-        Action<byte[]> sendProbe,
+        Action<IPAddress, byte[]> sendProbe,
         AdapterProfile activeProfile,
         IReadOnlyList<IPAddress> targets,
         CancellationToken cancellationToken)
@@ -402,10 +411,12 @@ public sealed class PcapLanEngine : IAsyncDisposable
         foreach (var address in targets)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            sendProbe(EthernetFrameCodec.BuildArpRequest(
-                activeProfile.LocalMac,
-                activeProfile.LocalAddress,
-                address));
+            sendProbe(
+                address,
+                EthernetFrameCodec.BuildArpRequest(
+                    activeProfile.LocalMac,
+                    activeProfile.LocalAddress,
+                    address));
             sent++;
             await Task.Delay(DeviceProbePolicy.RequestSpacing, cancellationToken);
         }
