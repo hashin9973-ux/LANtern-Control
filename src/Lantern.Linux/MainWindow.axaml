@@ -554,7 +554,7 @@
                   </StackPanel>
                   <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                     <Button x:Name="StartButton" Classes="action primary" Content="Start control" Click="StartButton_OnClick" />
-                    <Button x:Name="RefreshButton" Classes="action" Content="Refresh devices" IsVisible="False" Click="RefreshButton_OnClick" />
+                    <Button x:Name="RefreshButton" Classes="action" Content="Scan devices" IsVisible="False" Click="RefreshButton_OnClick" />
                     <Button x:Name="StopButton" Classes="action danger" Content="Stop &amp; restore" IsVisible="False" Click="StopButton_OnClick" />
                   </StackPanel>
                 </Grid>
