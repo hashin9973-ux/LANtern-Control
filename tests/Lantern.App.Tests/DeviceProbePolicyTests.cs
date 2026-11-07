@@ -76,6 +76,49 @@ public sealed class DeviceProbePolicyTests
     }
 
     [Fact]
+    public void GetTargets_RespectsCooldownEvenForManualForcedScans()
+    {
+        var now = DateTimeOffset.Parse("2026-11-06T12:00:00Z");
+        var address = IPAddress.Parse("192.168.31.21");
+        var adapter = new AdapterProfile(
+            "wifi",
+            "Wi-Fi",
+            "Test Wi-Fi",
+            IPAddress.Parse("192.168.31.10"),
+            24,
+            IPAddress.Parse("192.168.31.1"),
+            PhysicalAddress.Parse("001122334455"));
+        var registry = new DeviceRegistry();
+        registry.Remember(
+            address,
+            PhysicalAddress.Parse("AABBCCDDEE21"),
+            now,
+            "Recently seen tablet",
+            now);
+
+        var lastProbeAt = new Dictionary<IPAddress, DateTimeOffset>
+        {
+            [address] = now.AddSeconds(-30),
+        };
+
+        Assert.Empty(DeviceProbePolicy.GetTargets(
+            registry.Peek(),
+            adapter,
+            now,
+            force: true,
+            lastProbeAt));
+
+        Assert.Equal(
+            new[] { address },
+            DeviceProbePolicy.GetTargets(
+                registry.Peek(),
+                adapter,
+                now.AddSeconds(60),
+                force: true,
+                lastProbeAt));
+    }
+
+    [Fact]
     public void GetTargets_ForceChecksKnownRecentDevicesButNeverEnumeratesUnknownHosts()
     {
         var now = DateTimeOffset.Parse("2026-11-06T12:00:00Z");
