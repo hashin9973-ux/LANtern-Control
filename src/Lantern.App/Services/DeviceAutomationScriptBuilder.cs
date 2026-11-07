@@ -11,8 +11,8 @@ public static class DeviceAutomationScriptBuilder
     {
         ArgumentNullException.ThrowIfNull(device);
         var displayName = device.DisplayName
-            .Replace("\\r", " ", StringComparison.Ordinal)
-            .Replace("\\n", " ", StringComparison.Ordinal);
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal);
 
         return $$"""
             # LANtern Control — per-device PowerShell UI Automation
