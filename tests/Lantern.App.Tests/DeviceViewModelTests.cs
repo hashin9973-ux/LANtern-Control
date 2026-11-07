@@ -39,11 +39,13 @@ public sealed class DeviceViewModelTests
         Assert.Equal("download_limit_AABBCCDDEEFF", viewModel.DownloadLimitAutomationId);
         Assert.Equal("upload_limit_AABBCCDDEEFF", viewModel.UploadLimitAutomationId);
         Assert.Equal("pause_AABBCCDDEEFF", viewModel.PauseAutomationId);
+        Assert.Equal("copy_ids_AABBCCDDEEFF", viewModel.CopyAutomationIdsButtonAutomationId);
 
         viewModel.EditableName = "Renamed device";
 
         Assert.Equal(rowAutomationId, viewModel.RowAutomationId);
         Assert.Equal("pause_AABBCCDDEEFF", viewModel.PauseAutomationId);
+        Assert.Equal("copy_ids_AABBCCDDEEFF", viewModel.CopyAutomationIdsButtonAutomationId);
     }
 
     [Fact]
@@ -160,7 +162,10 @@ public sealed class DeviceViewModelTests
                         "ScriptAutomationSection",
                         "ScriptPathTextBox",
                         "BrowseScriptButton",
+                        "SaveScriptButton",
+                        "SaveScriptAsButton",
                         "RunScriptNowButton",
+                        "ScriptEditorTextBox",
                         "ScriptAutomationCheckBox",
                         "ScriptAutomationIntervalTextBox",
                         "ScriptAutomationStatusText",
@@ -171,7 +176,7 @@ public sealed class DeviceViewModelTests
 
                     var sidebarVersion = Assert.IsType<TextBlock>(
                         window.FindName("SidebarVersionText"));
-                    Assert.Equal("v0.1.9", sidebarVersion.Text);
+                    Assert.Equal("v0.1.10", sidebarVersion.Text);
                     var listLayoutGrid = Assert.IsType<DataGrid>(window.FindName("DeviceGrid"));
                     Assert.True(
                         double.IsPositiveInfinity(listLayoutGrid.MaxHeight),
@@ -310,6 +315,21 @@ public sealed class DeviceViewModelTests
                     Assert.Equal(18, deviceNameEditor.MinHeight);
                     Assert.Equal(new Thickness(0), deviceNameEditor.Margin);
                     Assert.Equal(new Thickness(0), deviceNameEditor.Padding);
+                    var copyAutomationIdsButton = Assert.IsType<Button>(
+                        deviceIdentity.FindName("CopyAutomationIdsButton"));
+                    Assert.Equal("Copy IDs", copyAutomationIdsButton.Content);
+                    var copyAutomationIdsBinding = Assert.IsType<Binding>(
+                        BindingOperations.GetBinding(
+                            copyAutomationIdsButton,
+                            System.Windows.Automation.AutomationProperties.AutomationIdProperty));
+                    Assert.Equal(
+                        "CopyAutomationIdsButtonAutomationId",
+                        copyAutomationIdsBinding.Path.Path);
+                    var scriptEditor = Assert.IsType<TextBox>(
+                        window.FindName("ScriptEditorTextBox"));
+                    Assert.True(scriptEditor.AcceptsReturn);
+                    Assert.True(scriptEditor.AcceptsTab);
+                    Assert.Equal(TextWrapping.NoWrap, scriptEditor.TextWrapping);
                     var deviceMetadata = Assert.IsType<StackPanel>(
                         deviceIdentity.FindName("DeviceMetadata"));
                     Assert.Equal(new Thickness(0), deviceMetadata.Margin);
