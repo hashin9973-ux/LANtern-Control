@@ -23,9 +23,10 @@ public sealed record DiscoveryRefreshResult(
           $"{KnownDeviceCount} known devices. Local-network discovery was unavailable: {ProbeWarning}"
         : ProbeRequestsSent == 0
             ? $"Device inventory refreshed — {CachedEntriesLoaded} neighbor-cache entries, " +
-              $"{KnownDeviceCount} known devices. No discovery requests were sent; manual discovery is limited to one pass per minute."
+              $"{KnownDeviceCount} known devices. No discovery requests were sent; local-network discovery is limited to one pass per minute."
             : $"Device inventory refreshed — {CachedEntriesLoaded} neighbor-cache entries, " +
               $"{KnownDeviceCount} known devices. ARP replies received from {DevicesResponded} of " +
               $"{CandidateHosts} candidate addresses after {ProbeRequestsSent} paced requests " +
+              "(maximum 50 ARP requests per second) " +
               $"({RetryRequestsSent} retries).";
 }
