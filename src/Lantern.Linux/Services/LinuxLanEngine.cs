@@ -22,6 +22,7 @@ public sealed class LinuxLanEngine : IAsyncDisposable
     private readonly ArpIdentityMonitor identityMonitor = new();
     private readonly ConcurrentDictionary<IPAddress, DateTimeOffset> lastPresenceProbeAt = new();
     private DateTimeOffset lastPresenceProbeBatchAt = DateTimeOffset.MinValue;
+    private string? presenceProbeAdapterId;
     private readonly ResolvedDeviceNameClaims resolvedNameClaims = new(Dns.GetHostName());
     private ConcurrentDictionary<IPAddress, PhysicalAddress> clients => clientMappings.Mappings;
     private readonly ConcurrentDictionary<string, byte> resolvingNames =
@@ -298,6 +299,16 @@ public sealed class LinuxLanEngine : IAsyncDisposable
         bool force,
         CancellationToken cancellationToken)
     {
+        if (!string.Equals(
+                presenceProbeAdapterId,
+                activeProfile.Id,
+                StringComparison.Ordinal))
+        {
+            lastPresenceProbeAt.Clear();
+            lastPresenceProbeBatchAt = DateTimeOffset.MinValue;
+            presenceProbeAdapterId = activeProfile.Id;
+        }
+
         var now = DateTimeOffset.UtcNow;
         if (lastPresenceProbeBatchAt != DateTimeOffset.MinValue &&
             now >= lastPresenceProbeBatchAt &&
