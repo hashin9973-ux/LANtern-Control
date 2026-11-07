@@ -177,4 +177,67 @@ public sealed class DeviceProbePolicyTests
 
         Assert.Equal(new[] { IPAddress.Parse("192.168.31.21") }, targets);
     }
+
+    [Fact]
+    public void GetDiscoveryTargets_EnumeratesLocalSegmentAndExcludesControllerAndGateway()
+    {
+        var local = IPAddress.Parse("192.168.31.10");
+        var gateway = IPAddress.Parse("192.168.31.1");
+        var adapter = new AdapterProfile(
+            "wifi",
+            "Wi-Fi",
+            "Test Wi-Fi",
+            local,
+            24,
+            gateway,
+            PhysicalAddress.Parse("001122334455"));
+
+        var targets = DeviceProbePolicy.GetDiscoveryTargets(adapter);
+
+        Assert.Equal(252, targets.Count);
+        Assert.DoesNotContain(local, targets);
+        Assert.DoesNotContain(gateway, targets);
+        Assert.Contains(IPAddress.Parse("192.168.31.20"), targets);
+        Assert.Equal(targets.Count, targets.Distinct().Count());
+    }
+
+    [Fact]
+    public void GetDiscoveryTargets_LimitsLargeNetworksToTheControllerLocal24()
+    {
+        var local = IPAddress.Parse("10.20.30.40");
+        var gateway = IPAddress.Parse("10.20.30.1");
+        var adapter = new AdapterProfile(
+            "ethernet",
+            "Ethernet",
+            "Test Ethernet",
+            local,
+            16,
+            gateway,
+            PhysicalAddress.Parse("001122334466"));
+
+        var targets = DeviceProbePolicy.GetDiscoveryTargets(adapter);
+
+        Assert.Equal(252, targets.Count);
+        Assert.All(targets, address => Assert.StartsWith("10.20.30.", address.ToString()));
+        Assert.DoesNotContain(local, targets);
+        Assert.DoesNotContain(gateway, targets);
+    }
+
+    [Fact]
+    public void GetDiscoveryTargets_RespectsTheMaximumTargetLimit()
+    {
+        var adapter = new AdapterProfile(
+            "wifi",
+            "Wi-Fi",
+            "Test Wi-Fi",
+            IPAddress.Parse("192.168.31.10"),
+            24,
+            IPAddress.Parse("192.168.31.1"),
+            PhysicalAddress.Parse("001122334455"));
+
+        var targets = DeviceProbePolicy.GetDiscoveryTargets(adapter);
+
+        Assert.True(targets.Count <= DeviceProbePolicy.MaxDiscoveryTargetsPerScan);
+        Assert.Equal(252, targets.Count);
+    }
 }
