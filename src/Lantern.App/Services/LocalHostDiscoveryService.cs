@@ -56,7 +56,7 @@ public sealed record LocalHostDiscoveryResult(
               $"Sent {ProbeAttempts} paced discovery query/probe(s) " +
               "(at least 10 ms between starts, at most 100 starts per second, " +
               "up to two link-local multicast queries, then no more than 5 direct probes " +
-              "per remaining address, at most 32 concurrent hosts, "
+              "per remaining address, at most 32 concurrent hosts, " +
               "and one pass per minute). " +
               $"SSDP {SsdpHosts}, DNS-SD/mDNS {MdnsServiceHosts}, ICMP {IcmpHosts}, " +
               $"TCP {TcpHosts}, NetBIOS {NetBiosHosts}, reverse mDNS {MdnsHosts}.";
