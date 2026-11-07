@@ -20,9 +20,10 @@ public static class DeviceProbePolicy
 
     public static TimeSpan RequestSpacing { get; } = TimeSpan.FromMilliseconds(150);
 
-    public static TimeSpan DiscoveryRequestSpacing { get; } = TimeSpan.FromMilliseconds(200);
+    // Explicit subnet discovery is a short, bounded burst capped at 50 ARP requests per second.
+    public static TimeSpan DiscoveryRequestSpacing { get; } = TimeSpan.FromMilliseconds(20);
 
-    public static TimeSpan DiscoveryRetrySpacing { get; } = TimeSpan.FromMilliseconds(150);
+    public static TimeSpan DiscoveryRetrySpacing { get; } = TimeSpan.FromMilliseconds(20);
 
     public static TimeSpan DiscoveryInterval { get; } = TimeSpan.FromSeconds(60);
 
