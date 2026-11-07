@@ -222,7 +222,8 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 hint.LastKnownIp!,
                 hint.MacAddress,
                 hint.LastSeenUtc ?? DateTimeOffset.MinValue,
-                hint.HostName);
+                hint.HostName,
+                hint.LastSeenUtc);
         }
     }
 
