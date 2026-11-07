@@ -10,6 +10,11 @@ public static class DeviceAutomationScriptBuilder
     public static string Build(DeviceViewModel device)
     {
         ArgumentNullException.ThrowIfNull(device);
+        if (!device.CanControl)
+        {
+            throw new InvalidOperationException("Only controllable devices can have automation scripts.");
+        }
+
         var displayName = device.DisplayName
             .Replace("\r", " ", StringComparison.Ordinal)
             .Replace("\n", " ", StringComparison.Ordinal);
