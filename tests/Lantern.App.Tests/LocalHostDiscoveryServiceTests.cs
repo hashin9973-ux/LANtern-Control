@@ -57,10 +57,10 @@ public sealed class LocalHostDiscoveryServiceTests
         Assert.Equal(1, result.SsdpHosts);
         Assert.Equal(1, result.MdnsServiceHosts);
         Assert.Contains("252 unconfirmed local candidate(s)", result.StatusMessage, StringComparison.Ordinal);
-        Assert.Contains("at least 10 ms between starts", result.StatusMessage, StringComparison.Ordinal);
-        Assert.Contains("at most 100 starts per second", result.StatusMessage, StringComparison.Ordinal);
+        Assert.Contains("at least 5 ms between starts", result.StatusMessage, StringComparison.Ordinal);
+        Assert.Contains("at most 200 starts per second", result.StatusMessage, StringComparison.Ordinal);
         Assert.Contains("up to two link-local multicast queries", result.StatusMessage, StringComparison.Ordinal);
-        Assert.Contains("at most 32 concurrent hosts", result.StatusMessage, StringComparison.Ordinal);
+        Assert.Contains("at most 64 concurrent hosts", result.StatusMessage, StringComparison.Ordinal);
         Assert.Contains("no more than 5 direct probes per remaining address", result.StatusMessage, StringComparison.Ordinal);
         Assert.Contains("SSDP 1, DNS-SD/mDNS 1, ICMP 1, TCP 1, NetBIOS 1, reverse mDNS 1", result.StatusMessage, StringComparison.Ordinal);
     }
