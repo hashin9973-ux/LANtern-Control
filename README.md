@@ -181,16 +181,24 @@ discovery is limited to the selected local IPv4 segment (capped to a /24 on
 larger networks) and at most 253 addresses.
 
 Only addresses without recent reachability evidence receive supplemental
-protocol checks. For each such address, LANtern tries one ICMP echo, then at
-most two TCP connection attempts (ports 443 and 80), followed by at most one
-NetBIOS node-status query and one mDNS reverse-lookup query. It stops probing
-that address after the first positive response. Supplemental probe starts are
-globally spaced by at least 50 ms, with at most eight hosts checked
-concurrently and no more than five supplemental probes per unconfirmed
-address. The supplemental pass has a separate one-minute cooldown per
-adapter. Both passes run only after the user presses **Scan devices**; no
-whole-subnet discovery pass is added to background monitoring. Background
-presence checks remain limited to remembered device addresses.
+discovery. Before probing individual addresses, LANtern sends at most one
+UPnP/SSDP root-device search and one DNS-SD/mDNS service-type enumeration query
+on the selected adapter. Replies are accepted only from unconfirmed addresses
+inside the selected local IPv4 segment. An address found through either
+multicast query is removed from the direct-probe list.
+
+For each remaining address, LANtern tries one ICMP echo, then at most two TCP
+connection attempts (ports 443 and 80), followed by at most one NetBIOS
+node-status query and one mDNS reverse-lookup query. It stops probing that
+address after the first positive response. The two link-local multicast
+queries each have a response window of up to 1.4 seconds. Multicast and direct
+probe starts share a global spacing of at least 50 ms; no more than eight
+individual hosts are checked concurrently, and no more than five direct
+fallback probes are sent to any remaining unconfirmed address. The
+supplemental pass has a separate one-minute cooldown per adapter. Both passes
+run only after the user presses **Scan devices**; no whole-subnet discovery
+pass is added to background monitoring. Background presence checks remain
+limited to remembered device addresses.
 
 Only explicit positive protocol responses count as live hosts; a TCP timeout
 or cached neighbor entry is not treated as proof of current reachability.
@@ -285,7 +293,7 @@ enable WinPcap API-compatible mode if offered, and restart LANtern Control.
 - Make sure the controller and devices are on the same normal LAN, not an
   isolated guest network.
 - Run LANtern Control as Administrator.
-- Click **Scan devices** to run ICMP, TCP, NetBIOS and mDNS checks alongside ARP discovery. Review the per-protocol counts. A host that filters all of these protocols may still require router/AP client or DHCP lease inventory.
+- Click **Scan devices** to run UPnP/SSDP, DNS-SD/mDNS, ICMP, TCP and NetBIOS checks alongside ARP discovery. Review the per-protocol counts. A host that does not advertise a supported service or filters all checked protocols may still require router/AP client or DHCP lease inventory.
 
 ### A device loses connectivity
 
