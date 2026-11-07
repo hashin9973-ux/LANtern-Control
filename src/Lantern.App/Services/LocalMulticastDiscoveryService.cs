@@ -39,7 +39,10 @@ public sealed class LocalMulticastDiscoveryService
             return [];
         }
 
-        var transactionId = (ushort)Random.Shared.Next(1, ushort.MaxValue + 1);
+        // This socket uses an ephemeral source port, so mDNS responders send
+        // a legacy unicast response to it and repeat the query identifier.
+        // Multicast mDNS query identifiers are specified as zero.
+        const ushort transactionId = 0;
         var ssdpTask = ScanSsdpAsync(
             adapter,
             allowedAddresses,
@@ -111,8 +114,31 @@ public sealed class LocalMulticastDiscoveryService
         }
 
         var statusLine = packet[..lineEnd];
-        return statusLine.StartsWith("HTTP/1.1 200 "u8) ||
-               statusLine.StartsWith("HTTP/1.0 200 "u8);
+        if (!statusLine.StartsWith("HTTP/1.1 200 "u8) &&
+            !statusLine.StartsWith("HTTP/1.0 200 "u8))
+        {
+            return false;
+        }
+
+        var headers = Encoding.ASCII.GetString(packet[(lineEnd + 2)..]);
+        foreach (var header in headers.Split("\\r\\n", StringSplitOptions.RemoveEmptyEntries))
+        {
+            var separator = header.IndexOf(':');
+            if (separator < 0)
+            {
+                continue;
+            }
+
+            var name = header[..separator].Trim();
+            var value = header[(separator + 1)..].Trim();
+            if (string.Equals(name, "ST", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(value, "upnp:rootdevice", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public static bool IsMdnsServiceBrowseResponse(
