@@ -165,6 +165,14 @@ public sealed class SettingsStore
             AutoScanIntervalSeconds = settings.AutoScanIntervalSeconds is >= 60 and <= 3600
                 ? settings.AutoScanIntervalSeconds
                 : 60,
+            ScriptAutomationEnabled = settings.ScriptAutomationEnabled &&
+                                      !string.IsNullOrWhiteSpace(settings.ScriptAutomationPath),
+            ScriptAutomationIntervalSeconds = settings.ScriptAutomationIntervalSeconds is >= 60 and <= 3600
+                ? settings.ScriptAutomationIntervalSeconds
+                : 60,
+            ScriptAutomationPath = string.IsNullOrWhiteSpace(settings.ScriptAutomationPath)
+                ? null
+                : settings.ScriptAutomationPath.Trim(),
         };
         foreach (var pair in settings.Devices)
         {
