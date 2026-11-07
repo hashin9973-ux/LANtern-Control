@@ -4,7 +4,7 @@
 
 # LANtern Control — Open-Source SelfishNet Alternative for Windows and Linux
 
-<a href="https://github.com/hashin9973-ux/LANtern-Control/releases/latest"><img alt="Release v0.1.9" src="https://img.shields.io/badge/release-v0.1.9-C51B3A?style=flat-square"></a>
+<a href="https://github.com/hashin9973-ux/LANtern-Control/releases/latest"><img alt="Release v0.1.10" src="https://img.shields.io/badge/release-v0.1.10-C51B3A?style=flat-square"></a>
 <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-C51B3A?style=flat-square"></a>
 <img alt="C#" src="https://img.shields.io/badge/language-C%23-239120?style=flat-square&amp;logo=csharp">
 <img alt=".NET 8" src="https://img.shields.io/badge/.NET-8.0-512BD4?style=flat-square&amp;logo=dotnet">
@@ -23,7 +23,7 @@ alternative with a modern desktop interface, LANtern Control is built for that
 use case.
 
 > [!IMPORTANT]
-> Windows `v0.1.9` is the current release. Linux `v0.1.0` is available as a
+> Windows `v0.1.10` is the current release. Linux `v0.1.0` is available as a
 > public beta AppImage. **macOS remains a work in progress (WIP).**
 
 ## Features
@@ -35,8 +35,8 @@ use case.
 - Keep a ten-minute network activity chart with 2.5-second samples.
 - Apply independent download and upload limits in `KB/s`.
 - Pause and restore a device's IPv4 internet connection.
-- Assign stable, MAC-based UI Automation IDs to device rows and controls.
-- Optionally run a selected PowerShell script on a configurable schedule while the Windows app is open.
+- Copy stable, MAC-based UI Automation IDs for each device directly from its row.
+- Edit, save, and run PowerShell scripts in the Windows app, with an optional configurable schedule.
 - Observe domains through DNS queries, TLS server names, and plain HTTP host
   headers without decrypting private HTTPS content.
 - Block domains for individual devices, including presets for common services.
@@ -99,15 +99,12 @@ Download the latest version from [GitHub Releases](https://github.com/hashin9973
 
 ### Windows installer
 
-1. Download `LANtern-Control-Setup-v0.1.9.msi`.
-2. Run the setup program.
-3. Choose the installation folder and whether to create Start Menu or desktop
-   shortcuts.
-4. Launch LANtern Control and accept the Administrator prompt.
+The automated GitHub release currently publishes the portable ZIP. An MSI can
+be built from source with `scripts/publish.ps1`; see [Building from source](#building-from-source).
 
 ### Windows portable version
 
-1. Download `LANtern-Control-v0.1.9-win-x64.zip`.
+1. Download `LANtern-Control-v0.1.10-win-x64.zip`.
 2. Extract the complete archive to a folder where it can remain.
 3. Run `LANtern Control.exe` as Administrator from that folder. Keep the
    extracted files together; no application installation is required.
@@ -259,26 +256,31 @@ non-intrusive whole-network traffic monitoring.
 
 ## Script automation and UI Automation
 
-The Windows app can run one user-selected PowerShell `.ps1` file manually or
-on a 60–3600 second schedule. Scheduled execution is disabled by default,
-requires explicit confirmation, runs only while LANtern is open, and stops
-when the app closes. A running script is limited to two minutes; a new run is
-skipped while a previous run is still active. The selected script
-path, enabled state, and interval are saved in LANtern's local settings file.
-Closing LANtern stops the schedule; it does not register a Windows Task
-Scheduler job.
+The Windows app includes a built-in PowerShell text editor. Use **Open…** to
+load an existing `.ps1` file, edit it in the app, and use **Save** or
+**Save As…**. When no file has been selected, **Save** creates
+`%LOCALAPPDATA%\LANternControl\Scripts\lantern-automation.ps1`. **Run now**
+saves the current editor contents before launching the script. Scheduled
+execution is disabled by default, requires explicit confirmation, runs every
+60–3600 seconds only while LANtern is open, and stops when the app closes.
+A running script is limited to two minutes; a new run is skipped while a
+previous run is still active. The selected script path, enabled state, and
+interval are saved in LANtern's local settings file. Closing LANtern stops
+the schedule; it does not register a Windows Task Scheduler job.
 
 Scripts run as the same Windows account and with the same permissions as
 LANtern. When LANtern is elevated, child scripts inherit that elevated token.
-Only select scripts you have inspected and trust. LANtern does not bypass the
-Windows PowerShell execution policy.
+Only run scripts you have inspected and understand. LANtern does not bypass
+the Windows PowerShell execution policy. Scheduled runs execute the last
+saved file; unsaved editor changes are not picked up until saved.
 
-Device rows and their controls expose stable UI Automation IDs derived from
-the MAC address, not the current row number or display name. For example,
-`device_E261190DBD54`, `pause_E261190DBD54`,
-`download_limit_E261190DBD54`, and `upload_limit_E261190DBD54`.
-Inventory-only rows without a verified MAC use an IP-based row ID and cannot
-be controlled.
+Each device row has a **Copy IDs** button beside its name. It copies the row,
+name editor, download limit, upload limit, and pause-switch Automation IDs as
+plain text. IDs are derived from the device's MAC address, not its sorted row
+number or display name, so they remain stable when the list is reordered.
+Inventory-only devices without a verified MAC use an IP-based identity and
+cannot be controlled. Scripts are separate PowerShell processes: copying an
+ID does not itself connect a script to LANtern's internal device collection.
 
 ## Domain visibility and blocking
 
