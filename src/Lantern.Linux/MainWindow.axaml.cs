@@ -916,6 +916,7 @@ public partial class MainWindow : Window
 
     private void UpdateButtons()
     {
+        ClearDeviceCacheButton.IsEnabled = !busy && !demoMode;
         if (demoMode)
         {
             StartButton.IsVisible = false;
