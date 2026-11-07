@@ -54,9 +54,9 @@ public sealed record LocalHostDiscoveryResult(
               $"{CandidateHosts} unconfirmed local candidate(s); " +
               $"{SkippedRecentlyObserved} recently observed address(es) skipped. " +
               $"Sent {ProbeAttempts} paced discovery query/probe(s) " +
-              "(at least 10 ms between starts, at most 100 starts per second, " +
+              "(at least 5 ms between starts, at most 200 starts per second, " +
               "up to two link-local multicast queries, then no more than 5 direct probes " +
-              "per remaining address, at most 32 concurrent hosts, " +
+              "per remaining address, at most 64 concurrent hosts, " +
               "and one pass per minute). " +
               $"SSDP {SsdpHosts}, DNS-SD/mDNS {MdnsServiceHosts}, ICMP {IcmpHosts}, " +
               $"TCP {TcpHosts}, NetBIOS {NetBiosHosts}, reverse mDNS {MdnsHosts}.";
@@ -70,13 +70,13 @@ public sealed record LocalHostDiscoveryResult(
 /// </summary>
 public sealed class LocalHostDiscoveryService
 {
-    private const int MaximumConcurrentHosts = 32;
-    private const int PingTimeoutMilliseconds = 250;
-    private const int TcpTimeoutMilliseconds = 150;
+    private const int MaximumConcurrentHosts = 64;
+    private const int PingTimeoutMilliseconds = 200;
+    private const int TcpTimeoutMilliseconds = 100;
 
     private static readonly int[] CommonTcpPorts = [443, 80];
-    // Supplemental discovery is paced globally to at most 100 starts per second.
-    private static readonly TimeSpan ProbeSpacing = TimeSpan.FromMilliseconds(10);
+    // Supplemental discovery is paced globally to at most 200 starts per second.
+    private static readonly TimeSpan ProbeSpacing = TimeSpan.FromMilliseconds(5);
     private static readonly long ProbeSpacingTimestampTicks =
         (long)(ProbeSpacing.TotalSeconds * Stopwatch.Frequency);
 
