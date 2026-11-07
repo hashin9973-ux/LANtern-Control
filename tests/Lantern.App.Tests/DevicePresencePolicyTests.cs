@@ -8,9 +8,10 @@ public sealed class DevicePresencePolicyTests
     [Theory]
     [InlineData(0, DevicePresence.Online)]
     [InlineData(15, DevicePresence.Online)]
-    [InlineData(16, DevicePresence.Offline)]
-    [InlineData(44, DevicePresence.Offline)]
-    [InlineData(45, DevicePresence.Offline)]
+    [InlineData(16, DevicePresence.Online)]
+    [InlineData(119, DevicePresence.Online)]
+    [InlineData(120, DevicePresence.Online)]
+    [InlineData(121, DevicePresence.Offline)]
     [InlineData(2592000, DevicePresence.Hidden)]
     public void Classify_UsesMissedLivenessWindows(int ageSeconds, DevicePresence expected)
     {
