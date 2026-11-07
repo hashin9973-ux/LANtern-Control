@@ -177,7 +177,7 @@ change the router configuration.
 
 **Scan devices** reads the selected adapter's OS neighbor cache and merges
 saved device identities. The ARP/cache pass runs first, with one request per
-candidate at 20 ms intervals (up to 50 ARP requests per second) and one 20 ms
+candidate at 10 ms intervals (up to 100 ARP requests per second) and one 10 ms
 retry for addresses that did not reply. Controller and gateway addresses are
 excluded. Candidate discovery is limited to the selected local IPv4 segment
 (capped to a /24 on larger networks) and at most 253 addresses. A /24 normally
@@ -195,8 +195,8 @@ connection attempts (ports 443 and 80), followed by at most one NetBIOS
 node-status query and one mDNS reverse-lookup query. It stops probing that
 address after the first positive response. The two link-local multicast
 queries each have a response window of up to 1.4 seconds. Multicast and direct
-probe starts share a global spacing of at least 10 ms (no more than 100 starts
-per second); no more than 32 individual hosts are checked concurrently, and
+probe starts share a global spacing of at least 5 ms (no more than 200 starts
+per second); no more than 64 individual hosts are checked concurrently, and
 no more than five direct fallback probes are sent to any remaining
 unconfirmed address. The supplemental pass has a separate one-minute cooldown
 per adapter. **Auto scan** is optional and disabled by default; when enabled,
