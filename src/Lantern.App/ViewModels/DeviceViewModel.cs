@@ -23,6 +23,7 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
     private bool pauseInternet;
     private bool isProtected;
     private bool isOnline = true;
+    private bool hasMacAddress;
     private string protectedReason = string.Empty;
 
     public DeviceViewModel(Func<DeviceViewModel, Task> changed)
@@ -45,6 +46,24 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
     }
 
     public string MacKey { get; private set; } = string.Empty;
+
+    public string DeviceKey => HasMacAddress
+        ? MacKey
+        : $"ip:{IpAddress}";
+
+    public bool HasMacAddress
+    {
+        get => hasMacAddress;
+        private set
+        {
+            if (SetField(ref hasMacAddress, value))
+            {
+                OnPropertyChanged(nameof(CanControl));
+                OnPropertyChanged(nameof(HasActiveRule));
+                OnPropertyChanged(nameof(DeviceKey));
+            }
+        }
+    }
 
     public string DisplayName
     {
@@ -160,7 +179,7 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
         }
     }
 
-    public bool CanControl => !IsProtected;
+    public bool CanControl => HasMacAddress && !IsProtected;
 
     public bool IsOnline
     {
@@ -183,15 +202,17 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
         bool isProtectedDevice,
         string protectedDeviceReason)
     {
-        MacKey = snapshot.MacAddress.ToString();
-        MacAddress = FormatMac(MacKey);
+        HasMacAddress = snapshot.HasMacAddress;
+        MacKey = HasMacAddress ? snapshot.MacAddress.ToString() : string.Empty;
+        MacAddress = HasMacAddress ? FormatMac(MacKey) : "MAC unavailable";
         alias = string.IsNullOrWhiteSpace(preferences?.Alias) ? null : preferences.Alias.Trim();
         downloadLimit = Math.Max(0, preferences?.DownloadKiloBytesPerSecond ?? 0);
         uploadLimit = Math.Max(0, preferences?.UploadKiloBytesPerSecond ?? 0);
-        pauseInternet = !isProtectedDevice && (preferences?.PauseInternet ?? false);
+        pauseInternet = CanControl && (preferences?.PauseInternet ?? false);
         OnPropertyChanged(nameof(DownloadLimit));
         OnPropertyChanged(nameof(UploadLimit));
         OnPropertyChanged(nameof(PauseInternet));
+        OnPropertyChanged(nameof(DeviceKey));
         OnPropertyChanged(nameof(HasActiveRule));
         IsProtected = isProtectedDevice;
         ProtectedReason = protectedDeviceReason;
@@ -200,7 +221,12 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
 
     public void Update(DeviceSnapshot snapshot, string? alias)
     {
+        var nextHasMacAddress = snapshot.HasMacAddress;
+        HasMacAddress = nextHasMacAddress;
+        MacKey = nextHasMacAddress ? snapshot.MacAddress.ToString() : string.Empty;
+        MacAddress = nextHasMacAddress ? FormatMac(MacKey) : "MAC unavailable";
         IpAddress = snapshot.IpAddress.ToString();
+        OnPropertyChanged(nameof(DeviceKey));
         if (this.alias is null && !string.IsNullOrWhiteSpace(alias))
         {
             this.alias = alias.Trim();
@@ -223,7 +249,11 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
         IsOnline = online;
         if (!IsProtected)
         {
-            ProtectedReason = online ? "Online" : "Offline";
+            ProtectedReason = HasMacAddress
+                ? online ? "Online" : "Offline"
+                : online
+                    ? "Online — inventory only"
+                    : "Offline — inventory only";
         }
     }
 

@@ -9,6 +9,7 @@ public sealed class DeviceRegistry
 {
     private readonly ConcurrentDictionary<string, DeviceRecord> devices =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<IPAddress, DeviceRecord> ipOnlyDevices = new();
     private readonly object snapshotSync = new();
     private DateTimeOffset lastSnapshot;
 
@@ -20,6 +21,7 @@ public sealed class DeviceRegistry
     public void BeginSession()
     {
         devices.Clear();
+        ipOnlyDevices.Clear();
         lock (snapshotSync)
         {
             lastSnapshot = DateTimeOffset.UtcNow;
@@ -30,8 +32,50 @@ public sealed class DeviceRegistry
         IPAddress ipAddress,
         PhysicalAddress macAddress,
         DateTimeOffset seenAt,
-        string? hostName = null) =>
+        string? hostName = null)
+    {
+        ArgumentNullException.ThrowIfNull(ipAddress);
+        ArgumentNullException.ThrowIfNull(macAddress);
+        ipOnlyDevices.TryRemove(ipAddress, out _);
         AddOrUpdate(ipAddress, macAddress, seenAt, hostName, refreshLastSeen: true);
+    }
+
+    /// <summary>
+    /// Records a positively responding IPv4 host when no trustworthy MAC mapping
+    /// was learned. These records are inventory-only and cannot be controlled.
+    /// </summary>
+    public void ObserveIpOnly(
+        IPAddress ipAddress,
+        DateTimeOffset seenAt,
+        string? hostName = null)
+    {
+        ArgumentNullException.ThrowIfNull(ipAddress);
+        if (ipAddress.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
+        {
+            throw new ArgumentException("IP-only inventory supports IPv4 addresses only.", nameof(ipAddress));
+        }
+
+        ipOnlyDevices.AddOrUpdate(
+            ipAddress,
+            _ => new DeviceRecord
+            {
+                MacAddress = PhysicalAddress.None,
+                IpAddress = ipAddress,
+                HostName = hostName,
+                FirstSeen = seenAt,
+                LastSeen = seenAt,
+            },
+            (_, existing) =>
+            {
+                existing.LastSeen = seenAt;
+                if (!string.IsNullOrWhiteSpace(hostName))
+                {
+                    existing.HostName = hostName;
+                }
+
+                return existing;
+            });
+    }
 
     public void Remember(
         IPAddress ipAddress,
@@ -100,6 +144,12 @@ public sealed class DeviceRegistry
         return devices.TryRemove(key, out _);
     }
 
+    public bool RemoveIpOnly(IPAddress ipAddress)
+    {
+        ArgumentNullException.ThrowIfNull(ipAddress);
+        return ipOnlyDevices.TryRemove(ipAddress, out _);
+    }
+
     public void SetHostName(PhysicalAddress macAddress, string? hostName)
     {
         if (string.IsNullOrWhiteSpace(hostName))
@@ -149,8 +199,8 @@ public sealed class DeviceRegistry
         {
             var seconds = Math.Max(0.001, (now - lastSnapshot).TotalSeconds);
             lastSnapshot = now;
-            var snapshots = new List<DeviceSnapshot>(devices.Count);
-            foreach (var record in devices.Values)
+            var snapshots = new List<DeviceSnapshot>(devices.Count + ipOnlyDevices.Count);
+            foreach (var record in devices.Values.Concat(ipOnlyDevices.Values))
             {
                 var download = Interlocked.Exchange(ref record.DownloadBytes, 0);
                 var upload = Interlocked.Exchange(ref record.UploadBytes, 0);
@@ -172,9 +222,9 @@ public sealed class DeviceRegistry
         }
     }
 
-    public IReadOnlyList<DeviceSnapshot> Peek()
-    {
-        return devices.Values
+    public IReadOnlyList<DeviceSnapshot> Peek() =>
+        devices.Values
+            .Concat(ipOnlyDevices.Values)
             .Select(
                 record => new DeviceSnapshot(
                     record.MacAddress,
@@ -185,5 +235,4 @@ public sealed class DeviceRegistry
                     0,
                     0))
             .ToArray();
-    }
 }

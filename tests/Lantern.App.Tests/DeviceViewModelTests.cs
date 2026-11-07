@@ -128,7 +128,7 @@ public sealed class DeviceViewModelTests
 
                     var sidebarVersion = Assert.IsType<TextBlock>(
                         window.FindName("SidebarVersionText"));
-                    Assert.Equal("v0.1.7", sidebarVersion.Text);
+                    Assert.Equal("v0.1.8", sidebarVersion.Text);
                     var listLayoutGrid = Assert.IsType<DataGrid>(window.FindName("DeviceGrid"));
                     Assert.True(
                         double.IsPositiveInfinity(listLayoutGrid.MaxHeight),
@@ -594,4 +594,34 @@ public sealed class DeviceViewModelTests
         Assert.DoesNotContain("LastSeenUtc = null", handler, StringComparison.Ordinal);
     }
 
+
+    [Fact]
+    public void Initialize_WithIpOnlySnapshot_ShowsInventoryOnlyAndDisablesControl()
+    {
+        var now = DateTimeOffset.Parse("2026-11-06T12:45:00Z");
+        var snapshot = new DeviceSnapshot(
+            PhysicalAddress.None,
+            IPAddress.Parse("192.168.31.49"),
+            null,
+            now,
+            now,
+            0,
+            0);
+        var viewModel = new DeviceViewModel(_ => Task.CompletedTask);
+
+        viewModel.Initialize(
+            snapshot,
+            null,
+            false,
+            "MAC unavailable — inventory only");
+        viewModel.SetPresence(true);
+
+        Assert.False(viewModel.HasMacAddress);
+        Assert.Equal("MAC unavailable", viewModel.MacAddress);
+        Assert.Equal("192.168.31.49", viewModel.IpAddress);
+        Assert.Equal("ip:192.168.31.49", viewModel.DeviceKey);
+        Assert.False(viewModel.CanControl);
+        Assert.False(viewModel.HasActiveRule);
+        Assert.Equal("Online — inventory only", viewModel.ProtectedReason);
+    }
 }

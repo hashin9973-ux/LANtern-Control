@@ -4,7 +4,7 @@
 
 # LANtern Control — Open-Source SelfishNet Alternative for Windows and Linux
 
-<a href="https://github.com/hashin9973-ux/LANtern-Control/releases/latest"><img alt="Release v0.1.7" src="https://img.shields.io/badge/release-v0.1.7-C51B3A?style=flat-square"></a>
+<a href="https://github.com/hashin9973-ux/LANtern-Control/releases/latest"><img alt="Release v0.1.8" src="https://img.shields.io/badge/release-v0.1.8-C51B3A?style=flat-square"></a>
 <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-C51B3A?style=flat-square"></a>
 <img alt="C#" src="https://img.shields.io/badge/language-C%23-239120?style=flat-square&amp;logo=csharp">
 <img alt=".NET 8" src="https://img.shields.io/badge/.NET-8.0-512BD4?style=flat-square&amp;logo=dotnet">
@@ -23,7 +23,7 @@ alternative with a modern desktop interface, LANtern Control is built for that
 use case.
 
 > [!IMPORTANT]
-> Windows `v0.1.7` is the current release. Linux `v0.1.0` is available as a
+> Windows `v0.1.8` is the current release. Linux `v0.1.0` is available as a
 > public beta AppImage. **macOS remains a work in progress (WIP).**
 
 ## Features
@@ -97,7 +97,7 @@ Download the latest version from [GitHub Releases](https://github.com/hashin9973
 
 ### Windows installer
 
-1. Download `LANtern-Control-Setup-v0.1.7.msi`.
+1. Download `LANtern-Control-Setup-v0.1.8.msi`.
 2. Run the setup program.
 3. Choose the installation folder and whether to create Start Menu or desktop
    shortcuts.
@@ -105,7 +105,7 @@ Download the latest version from [GitHub Releases](https://github.com/hashin9973
 
 ### Windows portable version
 
-1. Download `LANtern-Control-v0.1.7-win-x64.zip`.
+1. Download `LANtern-Control-v0.1.8-win-x64.zip`.
 2. Extract the complete archive to a folder where it can remain.
 3. Run `LANtern Control.exe` as Administrator from that folder. Keep the
    extracted files together; no application installation is required.
@@ -144,9 +144,9 @@ disconnecting the selected adapter, suspending, or rebooting.
 2. Select the network adapter whose local IP address and gateway match the
    network you want to manage.
 3. Click **Scan devices** to read the neighbor cache and saved device history,
-   then run a paced discovery pass across the selected local IPv4 segment.
-   LANtern retries addresses that did not answer the first request and shows
-   how many hosts replied. A scan is limited to once per minute.
+   then discover responsive hosts on the selected local IPv4 segment using ARP,
+   ICMP, common TCP services, NetBIOS and mDNS. Live IPs without a verified MAC
+   remain visible as inventory-only entries.
 4. Click **Start control** to enable the selected device rules and live capture.
 5. Enter a download or upload limit in `KB/s`. A value of `0` means unlimited.
 6. Use the **Internet** switch to pause or restore a device's connection.
@@ -174,24 +174,35 @@ change the router configuration.
 ## Device discovery and identity conflicts
 
 **Scan devices** reads the selected adapter's OS neighbor cache and merges
-saved device identities, then performs one user-requested, paced ARP discovery
-pass across the controller's local IPv4 segment. It sends one ARP request per
-candidate host address at 200 ms intervals, excluding the controller and
-gateway, then retries only addresses that did not answer at 150 ms intervals.
-Discovery is limited to the local /24 on larger networks and at most 253
-candidate addresses per scan. A manual discovery pass can run no more than once
-per minute per adapter. The result reports the number of validated ARP replies
-and retries sent, so a partial result is distinguishable from a scan that
-could not start. This lets an empty cache be repopulated without turning
-discovery into a continuous background sweep.
+saved device identities. The ARP/cache pass runs first, with one
+request per candidate at 200 ms intervals and one 150 ms retry for addresses
+that did not reply. Controller and gateway addresses are excluded. Candidate
+discovery is limited to the selected local IPv4 segment (capped to a /24 on
+larger networks) and at most 253 addresses.
 
-While control is running, automatic presence checks remain separate: they
-target only previously known IP addresses that have not been observed for at
-least 45 seconds, with no more than 100 targets in a batch, one batch per
-minute, and 150 ms between requests. Each IP has a 60-second probe cooldown.
-These background checks never enumerate unknown subnet addresses. LANtern
-does not perform ICMP ping sweeps or repeatedly scan every host every few
-seconds.
+Only addresses without recent reachability evidence receive supplemental
+protocol checks. For each such address, LANtern tries one ICMP echo, then at
+most two TCP connection attempts (ports 443 and 80), followed by at most one
+NetBIOS node-status query and one mDNS reverse-lookup query. It stops probing
+that address after the first positive response. Supplemental probe starts are
+globally spaced by at least 50 ms, with at most eight hosts checked
+concurrently and no more than five supplemental probes per unconfirmed
+address. The supplemental pass has a separate one-minute cooldown per
+adapter. Both passes run only after the user presses **Scan devices**; no
+whole-subnet discovery pass is added to background monitoring. Background
+presence checks remain limited to remembered device addresses.
+
+Only explicit positive protocol responses count as live hosts; a TCP timeout
+or cached neighbor entry is not treated as proof of current reachability.
+Positive IP-only responses remain visible as inventory-only entries when no
+fresh verified MAC mapping is available. Status reports positive responses
+by protocol and the validated ARP reply count.
+
+A live IP response is retained in the device list even when LANtern cannot
+obtain a verified MAC address. Such a row is labelled **inventory only** and
+cannot be renamed, paused, or rate-limited until a MAC mapping is confirmed.
+This avoids silently dropping responding hosts or associating them with a
+fabricated MAC address.
 
 A responding remembered device is marked online when LANtern receives its
 ARP reply or observes its traffic. A known device is treated as online for up
@@ -213,10 +224,13 @@ identified reliably by a passive listener alone. Router/AP association tables,
 DHCP lease history, or managed-switch telemetry provide stronger evidence.
 
 Software cannot increase Wi-Fi radio range or scan through walls. Manual
-discovery sends ARP requests only within the selected adapter's local IPv4
-segment (bounded to the local /24 on larger networks). Access-point client
+discovery is limited to the selected adapter's local IPv4 segment (bounded to
+the local /24 on larger networks). A device can be found without answering ARP
+when it responds to one of the supplemental protocols, but access-point client
 isolation, VLAN boundaries, a different broadcast network, driver limitations,
-or devices that do not answer ARP can still prevent detection. A device that
+or a device that is silent on all checked protocols can still prevent
+detection. Powered-off or completely silent devices require router/AP client
+inventory or DHCP lease history to be listed as unavailable. A device that
 moves to another address after the scan may not appear until another manual
 scan or a new DHCP/ARP observation occurs.
 
@@ -271,7 +285,7 @@ enable WinPcap API-compatible mode if offered, and restart LANtern Control.
 - Make sure the controller and devices are on the same normal LAN, not an
   isolated guest network.
 - Run LANtern Control as Administrator.
-- Click **Scan devices** to run a paced discovery pass with one retry for unanswered hosts. The app reports the number of ARP replies; a manual pass is limited to once per minute.
+- Click **Scan devices** to run ICMP, TCP, NetBIOS and mDNS checks alongside ARP discovery. Review the per-protocol counts. A host that filters all of these protocols may still require router/AP client or DHCP lease inventory.
 
 ### A device loses connectivity
 

@@ -11,7 +11,8 @@ public static class NetBiosNameResolver
 
     public static async Task<string?> ResolveAsync(
         IPAddress address,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Func<Func<Task>, CancellationToken, Task>? pacedSend = null)
     {
         ArgumentNullException.ThrowIfNull(address);
         if (address.AddressFamily != AddressFamily.InterNetwork)
@@ -24,11 +25,27 @@ public static class NetBiosNameResolver
             using var client = new UdpClient(AddressFamily.InterNetwork);
             client.Connect(address, NodeStatusPort);
             var query = BuildNodeStatusQuery((ushort)Random.Shared.Next(ushort.MaxValue + 1));
-            await client.SendAsync(query, cancellationToken);
+            Func<Task> send = async () =>
+            {
+                _ = await client.SendAsync(query, cancellationToken);
+            };
+            if (pacedSend is null)
+            {
+                await send();
+            }
+            else
+            {
+                await pacedSend(send, cancellationToken);
+            }
+
             var reply = await client.ReceiveAsync(cancellationToken)
                 .AsTask()
                 .WaitAsync(ReplyTimeout, cancellationToken);
             return ParseNodeStatusResponse(reply.Buffer);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception exception) when (
             exception is SocketException or TimeoutException or OperationCanceledException)

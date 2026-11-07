@@ -12,7 +12,8 @@ public static class MdnsNameResolver
 
     public static async Task<string?> ResolveAsync(
         IPAddress address,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Func<Func<Task>, CancellationToken, Task>? pacedSend = null)
     {
         ArgumentNullException.ThrowIfNull(address);
         if (address.AddressFamily != AddressFamily.InterNetwork)
@@ -27,11 +28,27 @@ public static class MdnsNameResolver
             var query = BuildReverseLookupQuery(
                 address,
                 (ushort)Random.Shared.Next(ushort.MaxValue + 1));
-            await client.SendAsync(query, cancellationToken);
+            Func<Task> send = async () =>
+            {
+                _ = await client.SendAsync(query, cancellationToken);
+            };
+            if (pacedSend is null)
+            {
+                await send();
+            }
+            else
+            {
+                await pacedSend(send, cancellationToken);
+            }
+
             var reply = await client.ReceiveAsync(cancellationToken)
                 .AsTask()
                 .WaitAsync(ReplyTimeout, cancellationToken);
             return ParsePtrResponse(reply.Buffer);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception exception) when (
             exception is SocketException or TimeoutException or OperationCanceledException)
