@@ -12,6 +12,17 @@ on:
       - scripts/verify-msi-installer.ps1
       - installer/**
       - README.md
+  pull_request:
+    branches:
+      - master
+    paths:
+      - .github/workflows/windows-portable-release.yml
+      - src/**
+      - tests/**
+      - scripts/publish.ps1
+      - scripts/verify-msi-installer.ps1
+      - installer/**
+      - README.md
   workflow_dispatch:
 
 permissions:
@@ -79,6 +90,7 @@ jobs:
           retention-days: 30
 
       - name: Publish GitHub Release
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3
         with:
           tag_name: v0.1.5
