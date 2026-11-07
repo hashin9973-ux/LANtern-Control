@@ -611,8 +611,9 @@ public partial class MainWindow : Window
 
         scriptRunInProgress = true;
         UpdateScriptAutomationControls();
-        activeScriptRunTask = RunSelectedScriptCoreAsync(scriptPath, isScheduled);
-        return activeScriptRunTask;
+        var runTask = RunSelectedScriptCoreAsync(scriptPath, isScheduled);
+        activeScriptRunTask = runTask.IsCompleted ? null : runTask;
+        return runTask;
     }
 
     private async Task RunSelectedScriptCoreAsync(string scriptPath, bool isScheduled)
