@@ -76,6 +76,37 @@ public sealed class DeviceProbePolicyTests
     }
 
     [Fact]
+    public void GetTargets_StopsAtTheMaximumBatchSize()
+    {
+        var now = DateTimeOffset.Parse("2026-11-06T12:00:00Z");
+        var adapter = new AdapterProfile(
+            "wifi",
+            "Wi-Fi",
+            "Test Wi-Fi",
+            IPAddress.Parse("192.168.31.10"),
+            24,
+            IPAddress.Parse("192.168.31.1"),
+            PhysicalAddress.Parse("001122334455"));
+        var registry = new DeviceRegistry();
+        for (var host = 11; host <= 160; host++)
+        {
+            registry.Remember(
+                IPAddress.Parse($"192.168.31.{host}"),
+                PhysicalAddress.Parse($"AABBCCDD{host / 256:X2}{host % 256:X2}"),
+                now,
+                $"Device {host}");
+        }
+
+        var targets = DeviceProbePolicy.GetTargets(
+            registry.Peek(),
+            adapter,
+            now,
+            force: true);
+
+        Assert.Equal(DeviceProbePolicy.MaxTargetsPerBatch, targets.Count);
+    }
+
+    [Fact]
     public void GetTargets_RespectsCooldownEvenForManualForcedScans()
     {
         var now = DateTimeOffset.Parse("2026-11-06T12:00:00Z");
