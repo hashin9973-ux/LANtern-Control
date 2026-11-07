@@ -272,7 +272,7 @@ public sealed class DeviceViewModelTests
                     Assert.Equal(new Thickness(0), deviceMetadata.Margin);
                     var macAddress = Assert.IsType<TextBlock>(
                         deviceIdentity.FindName("DeviceMacAddress"));
-                    Assert.Equal(9, macAddress.FontSize);
+                    Assert.Equal(11, macAddress.FontSize);
                     var xaml = File.ReadAllText(Path.Combine(
                         GetProjectRoot(),
                         "src",
