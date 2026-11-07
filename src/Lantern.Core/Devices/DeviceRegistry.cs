@@ -193,39 +193,6 @@ public sealed class DeviceRegistry
         }
     }
 
-    public void RecordTraffic(
-        IPAddress ipAddress,
-        PhysicalAddress macAddress,
-        TrafficDirection direction,
-        int byteCount,
-        DateTimeOffset? seenAt = null)
-    {
-        ArgumentNullException.ThrowIfNull(ipAddress);
-        ArgumentNullException.ThrowIfNull(macAddress);
-        if (byteCount <= 0)
-        {
-            return;
-        }
-
-        var macKey = TrafficPolicy.NormalizeMac(macAddress.ToString());
-        var endpointKey = $"{macKey}|{ipAddress}";
-        if (!devices.TryGetValue(macKey, out var record) ||
-            !record.IpAddress.Equals(ipAddress))
-        {
-            return;
-        }
-
-        record.LastSeen = seenAt ?? DateTimeOffset.UtcNow;
-        if (direction == TrafficDirection.Download)
-        {
-            Interlocked.Add(ref record.DownloadBytes, byteCount);
-        }
-        else
-        {
-            Interlocked.Add(ref record.UploadBytes, byteCount);
-        }
-    }
-
     public IReadOnlyList<DeviceSnapshot> TakeSnapshot(DateTimeOffset now)
     {
         lock (snapshotSync)
