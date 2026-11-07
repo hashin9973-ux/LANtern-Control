@@ -237,7 +237,7 @@ public partial class MainWindow : Window
         try
         {
             UpdateKnownDeviceHints();
-            SetStatus("Reading the neighbor cache and saved device history…", null);
+            SetStatus("Refreshing saved device history and checking known device addresses…", null);
             var result = await engine.ScanDevicesAsync(adapter);
             RefreshDevices(null, EventArgs.Empty);
             await SaveSettingsIfDirtyAsync();
