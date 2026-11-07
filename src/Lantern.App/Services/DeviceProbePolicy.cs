@@ -93,6 +93,32 @@ public static class DeviceProbePolicy
             .ToArray();
     }
 
+    /// <summary>
+    /// Selects only addresses that have not already produced recent reachability
+    /// evidence during the preceding ARP or traffic observation phase.
+    /// </summary>
+    public static IReadOnlyList<IPAddress> GetProtocolDiscoveryTargets(
+        AdapterProfile adapter,
+        IEnumerable<IPAddress> recentlyObservedAddresses)
+    {
+        ArgumentNullException.ThrowIfNull(adapter);
+        ArgumentNullException.ThrowIfNull(recentlyObservedAddresses);
+
+        var recentlyObserved = recentlyObservedAddresses.ToHashSet();
+        return GetDiscoveryTargets(adapter)
+            .Where(address => !recentlyObserved.Contains(address))
+            .ToArray();
+    }
+
+    public static bool IsDiscoveryScanDue(
+        DateTimeOffset? lastScanAt,
+        DateTimeOffset now)
+    {
+        return lastScanAt is null ||
+               now < lastScanAt.Value ||
+               now - lastScanAt.Value >= DiscoveryInterval;
+    }
+
     private static uint ToUInt32(IPAddress address)
     {
         var bytes = address.GetAddressBytes();

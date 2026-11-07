@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
@@ -21,7 +22,10 @@ public sealed record DiscoveredHost(
 
 public sealed record LocalHostDiscoveryResult(
     IReadOnlyList<DiscoveredHost> Hosts,
-    int CandidateHosts)
+    int CandidateHosts,
+    int SkippedRecentlyObserved = 0,
+    int ProbeAttempts = 0,
+    bool RateLimited = false)
 {
     public int IcmpHosts => Hosts.Count(host => host.Method == HostDiscoveryMethod.Icmp);
 
@@ -31,72 +35,129 @@ public sealed record LocalHostDiscoveryResult(
 
     public int MdnsHosts => Hosts.Count(host => host.Method == HostDiscoveryMethod.Mdns);
 
-    public string StatusMessage =>
-        $"Independent host discovery: {Hosts.Count} live IP endpoint(s) from {CandidateHosts} local candidates " +
-        $"(ICMP {IcmpHosts}, TCP {TcpHosts}, NetBIOS {NetBiosHosts}, mDNS {MdnsHosts}).";
+    public string StatusMessage => RateLimited
+        ? $"Supplemental protocol discovery skipped for {CandidateHosts} unconfirmed candidate(s): " +
+          "this adapter was scanned less than 60 seconds ago."
+        : CandidateHosts == 0
+            ? SkippedRecentlyObserved > 0
+                ? $"No supplemental probes were sent; {SkippedRecentlyObserved} local address(es) " +
+                  "already had recent reachability evidence."
+                : "No additional local IPv4 candidates were available for supplemental discovery."
+            : $"Independent host discovery: {Hosts.Count} live IP endpoint(s) from " +
+              $"{CandidateHosts} unconfirmed local candidate(s); " +
+              $"{SkippedRecentlyObserved} recently observed address(es) skipped. " +
+              $"Sent {ProbeAttempts} paced protocol probe(s) " +
+              $"(at least 50 ms between probe starts, at most 8 concurrent hosts, " +
+              "and no more than 5 probes per unconfirmed address; one pass per minute). " +
+              $"ICMP {IcmpHosts}, TCP {TcpHosts}, NetBIOS {NetBiosHosts}, mDNS {MdnsHosts}.";
 }
 
 /// <summary>
-/// Confirms local IPv4 hosts independently of the packet-capture ARP sweep.
-/// ICMP is tried first, followed by bounded TCP connect checks and then
-/// device-name protocols that can also provide positive liveness evidence.
-/// The target list is always obtained from the selected adapter's local range.
+/// Performs a supplemental, explicitly requested reachability check for local
+/// IPv4 addresses that did not already produce recent ARP or traffic evidence.
+/// Probes share one global pacer and are bounded per host. This service is never
+/// started by the background monitoring loop.
 /// </summary>
 public sealed class LocalHostDiscoveryService
 {
-    private const int MaximumConcurrentHosts = 48;
+    private const int MaximumConcurrentHosts = 8;
     private const int PingTimeoutMilliseconds = 400;
-    private const int PingAttempts = 2;
-    private const int PingRetryDelayMilliseconds = 60;
     private const int TcpTimeoutMilliseconds = 225;
 
-    private static readonly int[] CommonTcpPorts =
-    [
-        80,   // HTTP
-        443,  // HTTPS
-        445,  // SMB
-        22,   // SSH
-        139,  // NetBIOS session service
-        3389, // Remote desktop
-        554,  // RTSP
-        8080, // Alternate HTTP
-    ];
+    private static readonly int[] CommonTcpPorts = [443, 80];
+    private static readonly TimeSpan ProbeSpacing = TimeSpan.FromMilliseconds(50);
+    private static readonly long ProbeSpacingTimestampTicks =
+        (long)(ProbeSpacing.TotalSeconds * Stopwatch.Frequency);
+
+    private readonly SemaphoreSlim scanSync = new(1, 1);
+    private readonly SemaphoreSlim probeStartSync = new(1, 1);
+    private readonly Dictionary<string, DateTimeOffset> lastScanStartedAt =
+        new(StringComparer.Ordinal);
+    private long nextProbeTimestamp;
 
     public async Task<LocalHostDiscoveryResult> ScanAsync(
         AdapterProfile adapter,
+        IEnumerable<IPAddress>? recentlyObservedAddresses = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(adapter);
 
-        var targets = DeviceProbePolicy.GetDiscoveryTargets(adapter);
-        using var hostLimiter = new SemaphoreSlim(MaximumConcurrentHosts);
-        var probes = targets.Select(address =>
-            ProbeHostWithThrottleAsync(address, hostLimiter, cancellationToken));
-        var results = await Task.WhenAll(probes);
+        await scanSync.WaitAsync(cancellationToken);
+        try
+        {
+            var allTargets = DeviceProbePolicy.GetDiscoveryTargets(adapter);
+            var targets = DeviceProbePolicy.GetProtocolDiscoveryTargets(
+                adapter,
+                recentlyObservedAddresses ?? []);
+            var skippedRecentlyObserved = allTargets.Count - targets.Count;
+            if (targets.Count == 0)
+            {
+                return new LocalHostDiscoveryResult(
+                    [],
+                    0,
+                    skippedRecentlyObserved);
+            }
 
-        cancellationToken.ThrowIfCancellationRequested();
+            var scanStartedAt = DateTimeOffset.UtcNow;
+            if (lastScanStartedAt.TryGetValue(adapter.Id, out var previousScanAt) &&
+                !DeviceProbePolicy.IsDiscoveryScanDue(previousScanAt, scanStartedAt))
+            {
+                return new LocalHostDiscoveryResult(
+                    [],
+                    targets.Count,
+                    skippedRecentlyObserved,
+                    RateLimited: true);
+            }
 
-        var hosts = results
-            .Where(host => host is not null)
-            .Select(host => host!)
-            .OrderBy(host => host.Address.GetAddressBytes(), ByteArrayComparer.Instance)
-            .ToArray();
+            // Record the start, not completion, so concurrent callers and cancelled
+            // scans cannot immediately start another full protocol pass.
+            lastScanStartedAt[adapter.Id] = scanStartedAt;
 
-        return new LocalHostDiscoveryResult(hosts, targets.Count);
+            var probeAttempts = 0;
+            void CountProbeAttempt() => Interlocked.Increment(ref probeAttempts);
+
+            using var hostLimiter = new SemaphoreSlim(MaximumConcurrentHosts);
+            var probes = targets.Select(address =>
+                ProbeHostWithThrottleAsync(
+                    address,
+                    hostLimiter,
+                    cancellationToken,
+                    CountProbeAttempt));
+            var results = await Task.WhenAll(probes);
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var hosts = results
+                .Where(host => host is not null)
+                .Select(host => host!)
+                .OrderBy(host => host.Address.GetAddressBytes(), ByteArrayComparer.Instance)
+                .ToArray();
+
+            return new LocalHostDiscoveryResult(
+                hosts,
+                targets.Count,
+                skippedRecentlyObserved,
+                Volatile.Read(ref probeAttempts));
+        }
+        finally
+        {
+            scanSync.Release();
+        }
     }
 
     public static bool IsDefinitiveTcpResponse(SocketError error) =>
         error is SocketError.ConnectionRefused or SocketError.ConnectionReset;
 
-    private static async Task<DiscoveredHost?> ProbeHostWithThrottleAsync(
+    private async Task<DiscoveredHost?> ProbeHostWithThrottleAsync(
         IPAddress address,
         SemaphoreSlim limiter,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action onProbeStarted)
     {
         await limiter.WaitAsync(cancellationToken);
         try
         {
-            var pingTime = await TryPingAsync(address, cancellationToken);
+            var pingTime = await TryPingAsync(address, cancellationToken, onProbeStarted);
             if (pingTime is long latency)
             {
                 return new DiscoveredHost(
@@ -105,13 +166,16 @@ public sealed class LocalHostDiscoveryService
                     latency);
             }
 
-            if (await TryTcpAsync(address, cancellationToken))
+            if (await TryTcpAsync(address, cancellationToken, onProbeStarted))
             {
                 return new DiscoveredHost(address, HostDiscoveryMethod.Tcp);
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            string? netBiosName = await TryResolveNetBiosAsync(address, cancellationToken);
+            var netBiosName = await TryResolveNetBiosAsync(
+                address,
+                cancellationToken,
+                onProbeStarted);
             if (!string.IsNullOrWhiteSpace(netBiosName))
             {
                 return new DiscoveredHost(
@@ -121,7 +185,10 @@ public sealed class LocalHostDiscoveryService
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            string? mdnsName = await TryResolveMdnsAsync(address, cancellationToken);
+            var mdnsName = await TryResolveMdnsAsync(
+                address,
+                cancellationToken,
+                onProbeStarted);
             return string.IsNullOrWhiteSpace(mdnsName)
                 ? null
                 : new DiscoveredHost(
@@ -135,56 +202,41 @@ public sealed class LocalHostDiscoveryService
         }
     }
 
-    private static async Task<long?> TryPingAsync(
+    private async Task<long?> TryPingAsync(
         IPAddress address,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action onProbeStarted)
     {
         using var ping = new Ping();
-        long latencyTotal = 0;
-        var replies = 0;
-
-        for (var attempt = 0; attempt < PingAttempts; attempt++)
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (attempt > 0)
-            {
-                await Task.Delay(PingRetryDelayMilliseconds, cancellationToken);
-            }
-
-            try
-            {
-                var reply = await ping.SendPingAsync(
+            var reply = await RunPacedOperationAsync(
+                () => ping.SendPingAsync(
                     address,
                     TimeSpan.FromMilliseconds(PingTimeoutMilliseconds),
-                    cancellationToken: cancellationToken);
-                if (reply.Status == IPStatus.Success)
-                {
-                    latencyTotal += reply.RoundtripTime;
-                    replies++;
-                }
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception exception) when (
-                exception is PingException or SocketException)
-            {
-                // One failed ICMP attempt is inconclusive; the next discovery
-                // method still gets a chance to confirm the address.
-            }
-        }
+                    cancellationToken: cancellationToken),
+                cancellationToken,
+                onProbeStarted);
 
-        return replies == 0
-            ? null
-            : (long)Math.Round(
-                (double)latencyTotal / replies,
-                MidpointRounding.AwayFromZero);
+            return reply.Status == IPStatus.Success
+                ? reply.RoundtripTime
+                : null;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (
+            exception is PingException or SocketException)
+        {
+            return null;
+        }
     }
 
-    private static async Task<bool> TryTcpAsync(
+    private async Task<bool> TryTcpAsync(
         IPAddress address,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action onProbeStarted)
     {
         foreach (var port in CommonTcpPorts)
         {
@@ -199,8 +251,15 @@ public sealed class LocalHostDiscoveryService
 
             try
             {
-                await socket.ConnectAsync(address, port, timeout.Token);
-                if (socket.Connected)
+                var connected = await RunPacedOperationAsync(
+                    async () =>
+                    {
+                        await socket.ConnectAsync(address, port, timeout.Token);
+                        return socket.Connected;
+                    },
+                    cancellationToken,
+                    onProbeStarted);
+                if (connected)
                 {
                     return true;
                 }
@@ -211,7 +270,7 @@ public sealed class LocalHostDiscoveryService
             }
             catch (OperationCanceledException)
             {
-                // A filtered or silent port is not evidence that a host is online.
+                // A filtered or silent port is inconclusive, not evidence of a live host.
             }
             catch (SocketException exception) when (
                 IsDefinitiveTcpResponse(exception.SocketErrorCode))
@@ -221,7 +280,7 @@ public sealed class LocalHostDiscoveryService
             }
             catch (SocketException)
             {
-                // Network/routing errors are inconclusive; try the next port.
+                // Routing and network errors are inconclusive; try the one alternate port.
             }
             catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested)
             {
@@ -232,15 +291,23 @@ public sealed class LocalHostDiscoveryService
         return false;
     }
 
-    private static async Task<string?> TryResolveNetBiosAsync(
+    private async Task<string?> TryResolveNetBiosAsync(
         IPAddress address,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action onProbeStarted)
     {
         try
         {
-            var name = await NetBiosNameResolver.ResolveAsync(address, cancellationToken);
+            var name = await NetBiosNameResolver.ResolveAsync(
+                address,
+                cancellationToken,
+                (send, token) => RunPacedSendAsync(send, token, onProbeStarted));
             cancellationToken.ThrowIfCancellationRequested();
             return name;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception exception) when (
             exception is SocketException or TimeoutException)
@@ -249,20 +316,82 @@ public sealed class LocalHostDiscoveryService
         }
     }
 
-    private static async Task<string?> TryResolveMdnsAsync(
+    private async Task<string?> TryResolveMdnsAsync(
         IPAddress address,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action onProbeStarted)
     {
         try
         {
-            var name = await MdnsNameResolver.ResolveAsync(address, cancellationToken);
+            var name = await MdnsNameResolver.ResolveAsync(
+                address,
+                cancellationToken,
+                (send, token) => RunPacedSendAsync(send, token, onProbeStarted));
             cancellationToken.ThrowIfCancellationRequested();
             return name;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception exception) when (
             exception is SocketException or TimeoutException)
         {
             return null;
+        }
+    }
+
+    private async Task<T> RunPacedOperationAsync<T>(
+        Func<Task<T>> startOperation,
+        CancellationToken cancellationToken,
+        Action onProbeStarted)
+    {
+        Task<T> operation;
+        await probeStartSync.WaitAsync(cancellationToken);
+        try
+        {
+            await WaitForNextProbeSlotAsync(cancellationToken);
+            onProbeStarted();
+            operation = startOperation();
+            nextProbeTimestamp = Stopwatch.GetTimestamp() + ProbeSpacingTimestampTicks;
+        }
+        finally
+        {
+            probeStartSync.Release();
+        }
+
+        return await operation.ConfigureAwait(false);
+    }
+
+    private async Task RunPacedSendAsync(
+        Func<Task> startSend,
+        CancellationToken cancellationToken,
+        Action onProbeStarted)
+    {
+        Task send;
+        await probeStartSync.WaitAsync(cancellationToken);
+        try
+        {
+            await WaitForNextProbeSlotAsync(cancellationToken);
+            onProbeStarted();
+            send = startSend();
+            nextProbeTimestamp = Stopwatch.GetTimestamp() + ProbeSpacingTimestampTicks;
+        }
+        finally
+        {
+            probeStartSync.Release();
+        }
+
+        await send.ConfigureAwait(false);
+    }
+
+    private async Task WaitForNextProbeSlotAsync(CancellationToken cancellationToken)
+    {
+        var remainingTicks = nextProbeTimestamp - Stopwatch.GetTimestamp();
+        if (remainingTicks > 0)
+        {
+            var delaySeconds = remainingTicks / (double)Stopwatch.Frequency;
+            await Task.Delay(TimeSpan.FromSeconds(delaySeconds), cancellationToken);
         }
     }
 

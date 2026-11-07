@@ -247,4 +247,43 @@ public sealed class DeviceProbePolicyTests
         Assert.Equal(TimeSpan.FromMilliseconds(150), DeviceProbePolicy.DiscoveryRetrySpacing);
     }
 
+
+    [Fact]
+    public void GetProtocolDiscoveryTargets_SkipsRecentlyObservedAddresses()
+    {
+        var local = IPAddress.Parse("192.168.31.10");
+        var gateway = IPAddress.Parse("192.168.31.1");
+        var firstObserved = IPAddress.Parse("192.168.31.20");
+        var secondObserved = IPAddress.Parse("192.168.31.21");
+        var adapter = new AdapterProfile(
+            "wifi",
+            "Wi-Fi",
+            "Test Wi-Fi",
+            local,
+            24,
+            gateway,
+            PhysicalAddress.Parse("001122334455"));
+
+        var targets = DeviceProbePolicy.GetProtocolDiscoveryTargets(
+            adapter,
+            [firstObserved, secondObserved]);
+
+        Assert.Equal(250, targets.Count);
+        Assert.DoesNotContain(firstObserved, targets);
+        Assert.DoesNotContain(secondObserved, targets);
+        Assert.DoesNotContain(local, targets);
+        Assert.DoesNotContain(gateway, targets);
+    }
+
+    [Fact]
+    public void IsDiscoveryScanDue_EnforcesThePerAdapterOneMinuteInterval()
+    {
+        var now = DateTimeOffset.Parse("2026-11-06T12:00:00Z");
+
+        Assert.True(DeviceProbePolicy.IsDiscoveryScanDue(null, now));
+        Assert.False(DeviceProbePolicy.IsDiscoveryScanDue(now.AddSeconds(-59), now));
+        Assert.True(DeviceProbePolicy.IsDiscoveryScanDue(now.AddSeconds(-60), now));
+        Assert.True(DeviceProbePolicy.IsDiscoveryScanDue(now.AddSeconds(10), now));
+    }
+
 }

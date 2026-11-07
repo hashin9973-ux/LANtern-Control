@@ -240,19 +240,16 @@ public partial class MainWindow : Window
             UpdateKnownDeviceHints();
             var scanStartedAt = DateTimeOffset.UtcNow;
             SetStatus(
-                "Running independent ICMP, TCP, NetBIOS and mDNS discovery alongside ARP inventory…",
+                "Refreshing the neighbor cache and performing paced ARP discovery first…",
                 null);
-
-            // Run the independent reachability sweep while the existing ARP/cache
-            // path refreshes verified link-layer identities.
-            var hostDiscoveryTask = localHostDiscoveryService.ScanAsync(adapter);
-            var arpDiscoveryTask = engine.ScanDevicesAsync(adapter);
 
             DiscoveryRefreshResult arpResult;
             string? arpFailure = null;
             try
             {
-                arpResult = await arpDiscoveryTask;
+                // ARP gets first chance to identify hosts. Supplemental protocol
+                // probes run only after this paced pass has completed.
+                arpResult = await engine.ScanDevicesAsync(adapter);
             }
             catch (Exception exception)
             {
@@ -263,11 +260,25 @@ public partial class MainWindow : Window
                     ProbeWarning: exception.Message);
             }
 
+            var observationTime = DateTimeOffset.UtcNow;
+            var recentlyObservedAddresses = registry.Peek()
+                .Where(snapshot =>
+                    DevicePresencePolicy.Classify(snapshot.LastSeen, observationTime) ==
+                    DevicePresence.Online)
+                .Select(snapshot => snapshot.IpAddress)
+                .ToHashSet();
+
+            SetStatus(
+                "Checking only addresses without recent reachability evidence using paced protocol fallbacks…",
+                null);
+
             LocalHostDiscoveryResult hostResult;
             string? hostFailure = null;
             try
             {
-                hostResult = await hostDiscoveryTask;
+                hostResult = await localHostDiscoveryService.ScanAsync(
+                    adapter,
+                    recentlyObservedAddresses);
             }
             catch (Exception exception)
             {
@@ -293,8 +304,8 @@ public partial class MainWindow : Window
                 }
                 else
                 {
-                    // A live IP must remain visible even if ARP did not yield a
-                    // trustworthy MAC. Such rows are explicitly inventory-only.
+                    // Positive reachability without a fresh, consistent MAC mapping
+                    // is inventory-only. It cannot become an interception target.
                     registry.ObserveIpOnly(
                         host.Address,
                         DateTimeOffset.UtcNow,
@@ -302,19 +313,20 @@ public partial class MainWindow : Window
                 }
             }
 
+            RefreshDevices(null, EventArgs.Empty);
+            await SaveSettingsIfDirtyAsync();
+
             var ipOnlyCount = hostResult.Hosts
                 .Select(host => host.Address)
                 .Distinct()
                 .Count(address => !liveMacByIp.ContainsKey(address));
 
-            RefreshDevices(null, EventArgs.Empty);
-            await SaveSettingsIfDirtyAsync();
-
-            var status = $"{hostResult.StatusMessage} {arpResult.StatusMessage}";
+            var status = $"{arpResult.StatusMessage} {hostResult.StatusMessage}";
             if (ipOnlyCount > 0)
             {
                 status +=
-                    $" {ipOnlyCount} responding endpoint(s) had no verified MAC mapping and are shown as inventory-only.";
+                    $" {ipOnlyCount} responding endpoint(s) had no fresh verified MAC mapping " +
+                    "and are shown as inventory-only.";
             }
 
             if (!string.IsNullOrWhiteSpace(hostFailure))
