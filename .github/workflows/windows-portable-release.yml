@@ -29,7 +29,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: windows-portable-v0.1.8
+  group: windows-portable-v0.1.9
   cancel-in-progress: false
 
 jobs:
@@ -73,7 +73,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Path .\outputs -Force | Out-Null
-          $archive = ".\outputs\LANtern-Control-v0.1.8-win-x64.zip"
+          $archive = ".\outputs\LANtern-Control-v0.1.9-win-x64.zip"
           if (Test-Path $archive) { Remove-Item $archive -Force }
           Compress-Archive -Path .\release\* -DestinationPath $archive -CompressionLevel Optimal
           if (-not (Test-Path $archive)) { throw "Portable ZIP was not created." }
@@ -84,8 +84,8 @@ jobs:
       - name: Upload portable build artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: LANtern-Control-v0.1.8-win-x64
-          path: .\outputs\LANtern-Control-v0.1.8-win-x64.zip
+          name: LANtern-Control-v0.1.9-win-x64
+          path: .\outputs\LANtern-Control-v0.1.9-win-x64.zip
           if-no-files-found: error
           retention-days: 30
 
@@ -93,15 +93,15 @@ jobs:
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3
         with:
-          tag_name: v0.1.8
+          tag_name: v0.1.9
           target_commitish: master
-          name: LANtern Control v0.1.8
+          name: LANtern Control v0.1.9
           body: |
             Windows x64 portable build.
 
             Includes paced ARP discovery followed by supplemental ICMP, TCP, NetBIOS, and mDNS checks only for addresses without recent reachability evidence. Positive IPs without a fresh verified MAC remain visible as inventory-only entries; discovery does not expand interception eligibility.
             Manual discovery is limited to the selected local /24. ARP uses 200 ms primary spacing and 150 ms retry spacing. Supplemental probes are globally spaced by at least 50 ms, capped at 8 concurrent hosts and 5 probes per unconfirmed address, with a separate one-minute per-adapter cooldown. No supplemental subnet sweep runs in the background; automatic presence checks remain limited to known devices.
           generate_release_notes: true
-          files: .\outputs\LANtern-Control-v0.1.8-win-x64.zip
+          files: .\outputs\LANtern-Control-v0.1.9-win-x64.zip
           fail_on_unmatched_files: true
           make_latest: true
