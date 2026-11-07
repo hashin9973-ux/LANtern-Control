@@ -106,7 +106,7 @@ public sealed class DeviceProbePolicyTests
             adapter,
             now,
             force: true,
-            lastProbeAt));
+            lastProbeAt: lastProbeAt));
 
         Assert.Equal(
             new[] { address },
@@ -115,7 +115,7 @@ public sealed class DeviceProbePolicyTests
                 adapter,
                 now.AddSeconds(60),
                 force: true,
-                lastProbeAt));
+                lastProbeAt: lastProbeAt));
     }
 
     [Fact]
