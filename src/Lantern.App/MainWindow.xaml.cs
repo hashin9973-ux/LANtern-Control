@@ -5,6 +5,7 @@ using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.NetworkInformation;
+using System.Text;
 using Microsoft.Win32;
 using System.Windows;
 using System.Windows.Automation;
@@ -30,6 +31,10 @@ public partial class MainWindow : Window
     private const int MaximumAutoScanIntervalSeconds = 3600;
     private const int MinimumScriptIntervalSeconds = 60;
     private const int MaximumScriptIntervalSeconds = 3600;
+    private const string DefaultScriptTemplate =
+        "# LANtern Control PowerShell automation\r\n" +
+        "# Edit this script, save it, then use Run now or enable its schedule.\r\n" +
+        "Write-Output \"LANtern automation ran at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')\"\r\n";
     private static readonly HttpClient UpdateHttpClient = new()
     {
         Timeout = TimeSpan.FromSeconds(5),
@@ -45,6 +50,8 @@ public partial class MainWindow : Window
     private readonly CancellationTokenSource scriptRunCancellation = new();
     private Task? activeScriptRunTask;
     private bool scriptRunInProgress;
+    private bool isUpdatingScriptEditor;
+    private bool scriptEditorDirty;
     private readonly Dictionary<string, DeviceViewModel> deviceIndex =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DeviceActivityViewModel> websiteActivityIndex =
@@ -146,7 +153,24 @@ public partial class MainWindow : Window
         AutoScanIntervalTextBox.Text = settings.AutoScanIntervalSeconds.ToString();
         AutoScanCheckBox.IsChecked = settings.AutoScanEnabled;
         ConfigureAutoScanTimer();
-        ScriptPathTextBox.Text = settings.ScriptAutomationPath ?? string.Empty;
+        ScriptPathTextBox.Text = string.IsNullOrWhiteSpace(settings.ScriptAutomationPath)
+            ? "(not saved yet)"
+            : settings.ScriptAutomationPath;
+        SetScriptEditorText(DefaultScriptTemplate);
+        if (!string.IsNullOrWhiteSpace(settings.ScriptAutomationPath) &&
+            File.Exists(settings.ScriptAutomationPath))
+        {
+            try
+            {
+                SetScriptEditorText(await File.ReadAllTextAsync(settings.ScriptAutomationPath));
+            }
+            catch (Exception exception)
+            {
+                ScriptAutomationStatusText.Text =
+                    $"Could not load the selected script into the editor: {exception.Message}";
+            }
+        }
+
         ScriptAutomationIntervalTextBox.Text = settings.ScriptAutomationIntervalSeconds.ToString();
         ScriptAutomationCheckBox.IsChecked = settings.ScriptAutomationEnabled;
         ConfigureScriptAutomationTimer();
@@ -395,9 +419,14 @@ public partial class MainWindow : Window
 
     private async void BrowseScriptButton_OnClick(object sender, RoutedEventArgs eventArgs)
     {
+        if (!ConfirmDiscardUnsavedScriptEdits())
+        {
+            return;
+        }
+
         var dialog = new OpenFileDialog
         {
-            Title = "Choose a PowerShell script",
+            Title = "Open a PowerShell script",
             Filter = "PowerShell scripts (*.ps1)|*.ps1",
             CheckFileExists = true,
             CheckPathExists = true,
@@ -409,24 +438,186 @@ public partial class MainWindow : Window
         }
 
         var selectedPath = Path.GetFullPath(dialog.FileName);
-        settings.ScriptAutomationPath = selectedPath;
-        settings.ScriptAutomationEnabled = false;
-        ScriptPathTextBox.Text = selectedPath;
-        ScriptAutomationCheckBox.IsChecked = false;
-        ConfigureScriptAutomationTimer();
         try
         {
+            var scriptContent = await File.ReadAllTextAsync(selectedPath);
+            SetScriptEditorText(scriptContent);
+            settings.ScriptAutomationPath = selectedPath;
+            settings.ScriptAutomationEnabled = false;
+            ScriptPathTextBox.Text = selectedPath;
+            ScriptAutomationCheckBox.IsChecked = false;
+            ConfigureScriptAutomationTimer();
             await settingsStore.SaveAsync(settings);
             settingsDirty = false;
             UpdateScriptAutomationControls();
             ScriptAutomationStatusText.Text =
-                "Script selected. Review the file, then enable its schedule explicitly.";
+                "Script opened. Review and save your edits before running or scheduling it.";
         }
-        catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException)
+        catch (Exception exception)
         {
-            ScriptAutomationStatusText.Text = $"Could not save script selection: {exception.Message}";
+            ScriptAutomationStatusText.Text = $"Could not open script: {exception.Message}";
             SetStatus(exception.Message, false);
+        }
+    }
+
+    private async void SaveScriptButton_OnClick(object sender, RoutedEventArgs eventArgs)
+    {
+        await SaveScriptEditorAsync();
+    }
+
+    private async void SaveScriptAsButton_OnClick(object sender, RoutedEventArgs eventArgs)
+    {
+        var currentPath = settings.ScriptAutomationPath;
+        var initialDirectory = !string.IsNullOrWhiteSpace(currentPath)
+            ? Path.GetDirectoryName(currentPath)
+            : null;
+        var fallbackDirectory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "LANternControl",
+            "Scripts");
+        var dialog = new SaveFileDialog
+        {
+            Title = "Save PowerShell script as",
+            Filter = "PowerShell scripts (*.ps1)|*.ps1",
+            DefaultExt = ".ps1",
+            AddExtension = true,
+            FileName = !string.IsNullOrWhiteSpace(currentPath)
+                ? Path.GetFileName(currentPath)
+                : "lantern-automation.ps1",
+            InitialDirectory = !string.IsNullOrWhiteSpace(initialDirectory) &&
+                               Directory.Exists(initialDirectory)
+                ? initialDirectory
+                : Directory.Exists(fallbackDirectory)
+                    ? fallbackDirectory
+                    : Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            OverwritePrompt = true,
+        };
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        await SaveScriptEditorAsync(dialog.FileName);
+    }
+
+    private void ScriptEditorTextBox_OnTextChanged(
+        object sender,
+        TextChangedEventArgs eventArgs)
+    {
+        if (isUpdatingScriptEditor)
+        {
+            return;
+        }
+
+        scriptEditorDirty = true;
+        ScriptAutomationStatusText.Text =
+            "Unsaved editor changes. Save the script before relying on a scheduled run.";
+        UpdateScriptAutomationControls();
+    }
+
+    private void SetScriptEditorText(string content)
+    {
+        isUpdatingScriptEditor = true;
+        try
+        {
+            ScriptEditorTextBox.Text = content;
+        }
+        finally
+        {
+            isUpdatingScriptEditor = false;
+        }
+
+        scriptEditorDirty = false;
+    }
+
+    private bool ConfirmDiscardUnsavedScriptEdits()
+    {
+        if (!scriptEditorDirty)
+        {
+            return true;
+        }
+
+        return MessageBox.Show(
+            this,
+            "The editor contains unsaved changes. Discard them?",
+            "Discard unsaved script edits",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning) == MessageBoxResult.Yes;
+    }
+
+    private static string GetDefaultScriptPath() =>
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "LANternControl",
+            "Scripts",
+            "lantern-automation.ps1");
+
+    private async Task<bool> SaveScriptEditorAsync(string? destinationPath = null)
+    {
+        var scriptContent = ScriptEditorTextBox.Text;
+        if (string.IsNullOrWhiteSpace(scriptContent))
+        {
+            ScriptAutomationStatusText.Text =
+                "The editor is empty. Add a PowerShell command before saving or running.";
+            return false;
+        }
+
+        var selectedPath = destinationPath ?? settings.ScriptAutomationPath;
+        if (string.IsNullOrWhiteSpace(selectedPath))
+        {
+            selectedPath = GetDefaultScriptPath();
+        }
+
+        try
+        {
+            var fullPath = Path.GetFullPath(selectedPath);
+            if (!string.Equals(
+                    Path.GetExtension(fullPath),
+                    ".ps1",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                ScriptAutomationStatusText.Text = "Scripts must use the .ps1 file extension.";
+                return false;
+            }
+
+            var directory = Path.GetDirectoryName(fullPath);
+            if (string.IsNullOrWhiteSpace(directory))
+            {
+                ScriptAutomationStatusText.Text = "Choose a valid location for the script.";
+                return false;
+            }
+
+            Directory.CreateDirectory(directory);
+            var temporaryPath = Path.Combine(
+                directory,
+                $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
+            try
+            {
+                File.WriteAllText(temporaryPath, scriptContent, new UTF8Encoding(true));
+                File.Move(temporaryPath, fullPath, overwrite: true);
+            }
+            finally
+            {
+                if (File.Exists(temporaryPath))
+                {
+                    File.Delete(temporaryPath);
+                }
+            }
+
+            settings.ScriptAutomationPath = fullPath;
+            await settingsStore.SaveAsync(settings);
+            settingsDirty = false;
+            ScriptPathTextBox.Text = fullPath;
+            scriptEditorDirty = false;
+            ScriptAutomationStatusText.Text = $"Saved {Path.GetFileName(fullPath)}.";
+            UpdateScriptAutomationControls();
+            return true;
+        }
+        catch (Exception exception)
+        {
+            ScriptAutomationStatusText.Text = $"Could not save script: {exception.Message}";
+            SetStatus(exception.Message, false);
+            return false;
         }
     }
 
@@ -435,9 +626,22 @@ public partial class MainWindow : Window
         RoutedEventArgs eventArgs)
     {
         var enabled = ScriptAutomationCheckBox.IsChecked == true;
+        if (enabled && !TryGetScriptAutomationInterval(out _))
+        {
+            ScriptAutomationCheckBox.IsChecked = false;
+            ScriptAutomationStatusText.Text =
+                "Set an interval from 60 to 3600 seconds before enabling the schedule.";
+            return;
+        }
+
+        if (enabled && !await SaveScriptEditorAsync())
+        {
+            ScriptAutomationCheckBox.IsChecked = false;
+            return;
+        }
+
         if (enabled &&
-            (!TryGetScriptAutomationInterval(out var intervalSeconds) ||
-             string.IsNullOrWhiteSpace(settings.ScriptAutomationPath) ||
+            (string.IsNullOrWhiteSpace(settings.ScriptAutomationPath) ||
              !File.Exists(settings.ScriptAutomationPath) ||
              !string.Equals(
                  Path.GetExtension(settings.ScriptAutomationPath),
@@ -446,7 +650,7 @@ public partial class MainWindow : Window
         {
             ScriptAutomationCheckBox.IsChecked = false;
             ScriptAutomationStatusText.Text =
-                "Choose an existing .ps1 file and set an interval from 60 to 3600 seconds first.";
+                "Save a valid .ps1 script before enabling its schedule.";
             return;
         }
 
@@ -567,8 +771,10 @@ public partial class MainWindow : Window
     {
         RunScriptNowButton.IsEnabled =
             !scriptRunInProgress &&
-            !string.IsNullOrWhiteSpace(settings.ScriptAutomationPath) &&
-            File.Exists(settings.ScriptAutomationPath);
+            !string.IsNullOrWhiteSpace(ScriptEditorTextBox.Text);
+        ScriptEditorTextBox.IsEnabled = !scriptRunInProgress;
+        SaveScriptButton.IsEnabled = !scriptRunInProgress;
+        SaveScriptAsButton.IsEnabled = !scriptRunInProgress;
         ScriptAutomationCheckBox.IsEnabled = !scriptRunInProgress;
         ScriptAutomationIntervalTextBox.IsEnabled = !scriptRunInProgress;
         BrowseScriptButton.IsEnabled = !scriptRunInProgress;
@@ -578,6 +784,11 @@ public partial class MainWindow : Window
         object sender,
         RoutedEventArgs eventArgs)
     {
+        if (!await SaveScriptEditorAsync())
+        {
+            return;
+        }
+
         await StartSelectedScriptAsync(isScheduled: false);
     }
 
@@ -668,6 +879,33 @@ public partial class MainWindow : Window
             scriptRunInProgress = false;
             activeScriptRunTask = null;
             UpdateScriptAutomationControls();
+        }
+    }
+
+    private void CopyAutomationIdsButton_OnClick(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        if (sender is not Button { Tag: DeviceViewModel device })
+        {
+            return;
+        }
+
+        var automationIds = string.Join(
+            Environment.NewLine,
+            $"Device row: {device.RowAutomationId}",
+            $"Device name: {device.NameAutomationId}",
+            $"Download limit: {device.DownloadLimitAutomationId}",
+            $"Upload limit: {device.UploadLimitAutomationId}",
+            $"Pause switch: {device.PauseAutomationId}");
+        try
+        {
+            Clipboard.SetText(automationIds);
+            SetStatus($"Copied Automation IDs for {device.DisplayName}.", null);
+        }
+        catch (Exception exception)
+        {
+            SetStatus($"Could not copy Automation IDs: {exception.Message}", false);
         }
     }
 
