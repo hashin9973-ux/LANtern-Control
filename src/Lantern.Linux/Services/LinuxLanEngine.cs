@@ -20,6 +20,7 @@ public sealed class LinuxLanEngine : IAsyncDisposable
     private readonly SemaphoreSlim stopSync = new(1, 1);
     private readonly ClientMappingCache clientMappings = new();
     private readonly ArpIdentityMonitor identityMonitor = new();
+    private readonly ConcurrentDictionary<IPAddress, DateTimeOffset> lastPresenceProbeAt = new();
     private readonly ResolvedDeviceNameClaims resolvedNameClaims = new(Dns.GetHostName());
     private ConcurrentDictionary<IPAddress, PhysicalAddress> clients => clientMappings.Mappings;
     private readonly ConcurrentDictionary<string, byte> resolvingNames =
@@ -77,6 +78,7 @@ public sealed class LinuxLanEngine : IAsyncDisposable
         foreach (var address in clientMappings.RemoveByMac(macAddress))
         {
             frameRouter?.RemoveClient(address);
+            lastPresenceProbeAt.TryRemove(address, out _);
         }
     }
 
@@ -299,7 +301,8 @@ public sealed class LinuxLanEngine : IAsyncDisposable
             registry.Peek(),
             activeProfile,
             DateTimeOffset.UtcNow,
-            force);
+            force,
+            lastPresenceProbeAt);
         if (targets.Count == 0)
         {
             return 0;
@@ -308,7 +311,11 @@ public sealed class LinuxLanEngine : IAsyncDisposable
         if (arpDevice is not null && injectionDevice is not null)
         {
             return await SendPresenceProbesAsync(
-                SendArpPacket,
+                (address, bytes) =>
+                {
+                    SendArpPacket(bytes);
+                    lastPresenceProbeAt[address] = DateTimeOffset.UtcNow;
+                },
                 activeProfile,
                 targets,
                 cancellationToken);
@@ -340,12 +347,14 @@ public sealed class LinuxLanEngine : IAsyncDisposable
             probeInjector.Open(LinuxCaptureConfiguration.CreateForForwarding());
             injectorOpened = true;
             return await SendPresenceProbesAsync(
-                bytes =>
+                (address, bytes) =>
                 {
                     lock (injectionSync)
                     {
                         probeInjector.SendPacket(bytes);
                     }
+
+                    lastPresenceProbeAt[address] = DateTimeOffset.UtcNow;
                 },
                 activeProfile,
                 targets,
@@ -382,7 +391,7 @@ public sealed class LinuxLanEngine : IAsyncDisposable
     }
 
     private static async Task<int> SendPresenceProbesAsync(
-        Action<byte[]> sendProbe,
+        Action<IPAddress, byte[]> sendProbe,
         AdapterProfile activeProfile,
         IReadOnlyList<IPAddress> targets,
         CancellationToken cancellationToken)
@@ -391,10 +400,12 @@ public sealed class LinuxLanEngine : IAsyncDisposable
         foreach (var address in targets)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            sendProbe(EthernetFrameCodec.BuildArpRequest(
-                activeProfile.LocalMac,
-                activeProfile.LocalAddress,
-                address));
+            sendProbe(
+                address,
+                EthernetFrameCodec.BuildArpRequest(
+                    activeProfile.LocalMac,
+                    activeProfile.LocalAddress,
+                    address));
             sent++;
             await Task.Delay(DeviceProbePolicy.RequestSpacing, cancellationToken);
         }
