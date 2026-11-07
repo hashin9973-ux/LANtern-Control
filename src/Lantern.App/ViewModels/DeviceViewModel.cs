@@ -51,6 +51,21 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
         ? MacKey
         : $"ip:{IpAddress}";
 
+    // IDs are derived from device identity, never from a sorted row index or display name.
+    public string AutomationIdSuffix => HasMacAddress
+        ? MacKey
+        : $"ip_{IpAddress.Replace('.', '_')}";
+
+    public string RowAutomationId => $"device_{AutomationIdSuffix}";
+
+    public string NameAutomationId => $"device_name_{AutomationIdSuffix}";
+
+    public string DownloadLimitAutomationId => $"download_limit_{AutomationIdSuffix}";
+
+    public string UploadLimitAutomationId => $"upload_limit_{AutomationIdSuffix}";
+
+    public string PauseAutomationId => $"pause_{AutomationIdSuffix}";
+
     public bool HasMacAddress
     {
         get => hasMacAddress;
@@ -213,6 +228,7 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(UploadLimit));
         OnPropertyChanged(nameof(PauseInternet));
         OnPropertyChanged(nameof(DeviceKey));
+        NotifyAutomationIdsChanged();
         OnPropertyChanged(nameof(HasActiveRule));
         IsProtected = isProtectedDevice;
         ProtectedReason = protectedDeviceReason;
@@ -227,6 +243,7 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
         MacAddress = nextHasMacAddress ? FormatMac(MacKey) : "MAC unavailable";
         IpAddress = snapshot.IpAddress.ToString();
         OnPropertyChanged(nameof(DeviceKey));
+        NotifyAutomationIdsChanged();
         if (this.alias is null && !string.IsNullOrWhiteSpace(alias))
         {
             this.alias = alias.Trim();
@@ -269,6 +286,16 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
 
     private static string FormatMac(string value) =>
         string.Join(":", Enumerable.Range(0, 6).Select(index => value.Substring(index * 2, 2)));
+
+    private void NotifyAutomationIdsChanged()
+    {
+        OnPropertyChanged(nameof(AutomationIdSuffix));
+        OnPropertyChanged(nameof(RowAutomationId));
+        OnPropertyChanged(nameof(NameAutomationId));
+        OnPropertyChanged(nameof(DownloadLimitAutomationId));
+        OnPropertyChanged(nameof(UploadLimitAutomationId));
+        OnPropertyChanged(nameof(PauseAutomationId));
+    }
 
     private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
     {
