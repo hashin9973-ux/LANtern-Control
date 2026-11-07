@@ -13,6 +13,8 @@ public sealed record DeviceSnapshot(
     double UploadBytesPerSecond)
 {
     public double TotalBytesPerSecond => DownloadBytesPerSecond + UploadBytesPerSecond;
+
+    public bool HasMacAddress => MacAddress.GetAddressBytes().Length == 6;
 }
 
 internal sealed class DeviceRecord
