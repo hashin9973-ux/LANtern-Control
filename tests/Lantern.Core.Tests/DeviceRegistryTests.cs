@@ -59,4 +59,55 @@ public sealed class DeviceRegistryTests
         var device = Assert.Single(registry.Peek());
         Assert.Equal(lastSeen, device.LastSeen);
     }
+
+    [Fact]
+    public void ObserveIpOnly_AddsLiveInventoryWithoutInventingAMacAddress()
+    {
+        var registry = new DeviceRegistry();
+        var ip = IPAddress.Parse("192.168.31.45");
+        var observedAt = DateTimeOffset.Parse("2026-11-06T12:30:00Z");
+
+        registry.ObserveIpOnly(ip, observedAt, "Living-room speaker");
+
+        var device = Assert.Single(registry.Peek());
+        Assert.Equal(ip, device.IpAddress);
+        Assert.Equal(PhysicalAddress.None, device.MacAddress);
+        Assert.False(device.HasMacAddress);
+        Assert.Equal(observedAt, device.LastSeen);
+        Assert.Equal("Living-room speaker", device.HostName);
+    }
+
+    [Fact]
+    public void Observe_WithVerifiedMac_ReplacesIpOnlyEntryAtThatAddress()
+    {
+        var registry = new DeviceRegistry();
+        var ip = IPAddress.Parse("192.168.31.46");
+        var mac = PhysicalAddress.Parse("AABBCCDDEE46");
+        var observedAt = DateTimeOffset.Parse("2026-11-06T12:35:00Z");
+
+        registry.ObserveIpOnly(ip, observedAt.AddSeconds(-5), "Unknown host");
+        registry.Observe(ip, mac, observedAt, "Verified host");
+
+        var device = Assert.Single(registry.Peek());
+        Assert.Equal(ip, device.IpAddress);
+        Assert.Equal(mac, device.MacAddress);
+        Assert.True(device.HasMacAddress);
+        Assert.Equal("Verified host", device.HostName);
+    }
+
+    [Fact]
+    public void RemoveIpOnly_DeletesOnlyTheRequestedIpIdentity()
+    {
+        var registry = new DeviceRegistry();
+        var first = IPAddress.Parse("192.168.31.47");
+        var second = IPAddress.Parse("192.168.31.48");
+        registry.ObserveIpOnly(first, DateTimeOffset.UtcNow);
+        registry.ObserveIpOnly(second, DateTimeOffset.UtcNow);
+
+        Assert.True(registry.RemoveIpOnly(first));
+
+        var remaining = Assert.Single(registry.Peek());
+        Assert.Equal(second, remaining.IpAddress);
+        Assert.False(remaining.HasMacAddress);
+    }
 }
