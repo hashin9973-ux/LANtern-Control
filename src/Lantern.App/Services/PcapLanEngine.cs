@@ -392,10 +392,6 @@ public sealed class PcapLanEngine : IAsyncDisposable
             {
                 lastDiscoveryProbeBatchAt = DateTimeOffset.UtcNow;
             }
-            else
-            {
-                lastPresenceProbeBatchAt = DateTimeOffset.UtcNow;
-            }
         }
 
         if (arpDevice is not null)
