@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 
 namespace Lantern.App.Services;
 
@@ -65,8 +66,8 @@ public sealed class PowerShellScriptRunner
             throw new InvalidOperationException("Windows PowerShell could not be started.");
         }
 
-        var standardOutputTask = process.StandardOutput.ReadToEndAsync();
-        var standardErrorTask = process.StandardError.ReadToEndAsync();
+        var standardOutputTask = ReadBoundedAsync(process.StandardOutput);
+        var standardErrorTask = ReadBoundedAsync(process.StandardError);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(MaximumRunTime);
 
@@ -86,8 +87,8 @@ public sealed class PowerShellScriptRunner
             timedOut = true;
         }
 
-        var standardOutput = Truncate(await standardOutputTask.ConfigureAwait(false));
-        var standardError = Truncate(await standardErrorTask.ConfigureAwait(false));
+        var standardOutput = await standardOutputTask.ConfigureAwait(false);
+        var standardError = await standardErrorTask.ConfigureAwait(false);
         return new ScriptRunResult(
             process.ExitCode,
             timedOut,
@@ -123,10 +124,37 @@ public sealed class PowerShellScriptRunner
         }
     }
 
-    private static string Truncate(string value) =>
-        value.Length <= MaximumCapturedCharacters
-            ? value
-            : value[^MaximumCapturedCharacters..];
+    private static async Task<string> ReadBoundedAsync(StreamReader reader)
+    {
+        var captured = new StringBuilder(MaximumCapturedCharacters);
+        var buffer = new char[1024];
+        var truncated = false;
+        while (true)
+        {
+            var count = await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false);
+            if (count == 0)
+            {
+                break;
+            }
+
+            var remaining = MaximumCapturedCharacters - captured.Length;
+            var retained = Math.Min(remaining, count);
+            if (retained > 0)
+            {
+                captured.Append(buffer, 0, retained);
+            }
+
+            truncated |= retained < count;
+        }
+
+        if (truncated)
+        {
+            captured.AppendLine();
+            captured.Append("[remaining output omitted]");
+        }
+
+        return captured.ToString();
+    }
 }
 
 public sealed record ScriptRunResult(
