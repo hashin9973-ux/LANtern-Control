@@ -20,17 +20,16 @@ public sealed class PcapLanEngineConfigurationTests
     }
 
     [Fact]
-    public void ProbeInterval_MatchesThePreviouslyWorkingScanner()
+    public void ManualDiscovery_UsesPassiveInventoryWithoutProbeEntryPoints()
     {
-        Assert.Equal(TimeSpan.FromMilliseconds(10), PcapLanEngine.ProbeInterval);
-        Assert.Equal(TimeSpan.FromMilliseconds(800), PcapLanEngine.ProbeReplyWindow);
-    }
+        const System.Reflection.BindingFlags nonPublicInstance =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
 
-    [Fact]
-    public void AutomaticMaintenance_DoesNotContinuouslySweepTheSubnet()
-    {
-        Assert.False(PassiveDiscoveryProfile.Default.ProbeSubnetOnRefresh);
-        Assert.Equal(TimeSpan.FromSeconds(5), PassiveDiscoveryProfile.Default.RefreshInterval);
+        Assert.Null(typeof(PcapLanEngine).GetMethod("ProbeSubnetAsync", nonPublicInstance));
+        Assert.Null(typeof(PcapLanEngine).GetMethod("ProbeKnownClients", nonPublicInstance));
+        Assert.Null(typeof(PcapLanEngine).GetMethod("RefreshCachedNeighborsAsync", nonPublicInstance));
+        Assert.Null(typeof(PcapLanEngine).GetProperty("ProbeInterval"));
+        Assert.Null(typeof(PcapLanEngine).GetProperty("ProbeReplyWindow"));
     }
 
     [Fact]

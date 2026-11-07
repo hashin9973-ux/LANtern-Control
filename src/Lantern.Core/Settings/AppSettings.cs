@@ -29,4 +29,6 @@ public sealed class DevicePreferences
     public bool PauseInternet { get; set; }
 
     public string? LastKnownIp { get; set; }
+
+    public DateTimeOffset? LastSeenUtc { get; set; }
 }

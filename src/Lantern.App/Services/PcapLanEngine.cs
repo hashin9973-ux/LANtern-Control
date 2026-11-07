@@ -11,18 +11,13 @@ namespace Lantern.App.Services;
 
 public sealed class PcapLanEngine : IAsyncDisposable
 {
-    public static TimeSpan ProbeInterval { get; } = TimeSpan.FromMilliseconds(10);
-
-    public static TimeSpan ProbeReplyWindow { get; } = TimeSpan.FromMilliseconds(800);
-
     private readonly object arpSendSync = new();
     private readonly SemaphoreSlim refreshSync = new(1, 1);
     private readonly SemaphoreSlim stopSync = new(1, 1);
     private readonly TrafficPolicy policy;
     private readonly DeviceRegistry registry;
-    private readonly PassiveDiscoveryProfile discoveryProfile =
-        PassiveDiscoveryProfile.Default;
     private readonly ClientMappingCache clientMappings = new();
+    private readonly ArpIdentityMonitor identityMonitor = new();
     private readonly ResolvedDeviceNameClaims resolvedNameClaims = new(Dns.GetHostName());
     private readonly ConcurrentDictionary<string, byte> resolvingNames =
         new(StringComparer.OrdinalIgnoreCase);
@@ -34,8 +29,6 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private PhysicalAddress? gatewayMac;
     private FrameRouter? frameRouter;
     private TaskCompletionSource<PhysicalAddress>? gatewayResolution;
-    private ConcurrentDictionary<IPAddress, PhysicalAddress>? activeProbeReplies;
-    private ConcurrentDictionary<string, IPAddress>? activeKnownDeviceReplies;
     private KnownDeviceHint[] knownDeviceHints = [];
     private string[] rejectedResolvedNames = [];
     private string? backgroundFailure;
@@ -68,6 +61,8 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
     public event EventHandler<DeviceDomainObservedEventArgs>? DeviceDomainObserved;
 
+    public event EventHandler<string>? IdentityAlertDetected;
+
     public void ReplaceKnownDeviceHints(IEnumerable<KnownDeviceHint> hints)
     {
         ArgumentNullException.ThrowIfNull(hints);
@@ -97,6 +92,9 @@ public sealed class PcapLanEngine : IAsyncDisposable
         resolvedNameClaims.Reset(rejectedResolvedNames);
         resolvingNames.Clear();
         registry.BeginSession();
+        identityMonitor.Reset();
+        SeedRememberedInventory();
+
         var clients = clientMappings.Mappings;
         restoring = false;
         backgroundFailure = null;
@@ -188,13 +186,27 @@ public sealed class PcapLanEngine : IAsyncDisposable
         }
     }
 
-    public async Task<DiscoveryRefreshResult> RefreshNeighborsAsync(
+    public Task<DiscoveryRefreshResult> RefreshNeighborsAsync(
         CancellationToken cancellationToken = default)
     {
+        var activeProfile = profile ??
+            throw new InvalidOperationException("Select an adapter before scanning devices.");
+        return ScanDevicesAsync(activeProfile, cancellationToken);
+    }
+
+    public async Task<DiscoveryRefreshResult> ScanDevicesAsync(
+        AdapterProfile selectedAdapter,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(selectedAdapter);
         await refreshSync.WaitAsync(cancellationToken);
         try
         {
-            return await RefreshNeighborsCoreAsync(cancellationToken);
+            SeedRememberedInventory();
+            var cachedEntries = await RefreshWindowsNeighborCacheAsync(
+                selectedAdapter,
+                cancellationToken);
+            return new DiscoveryRefreshResult(cachedEntries, registry.Peek().Count);
         }
         finally
         {
@@ -202,187 +214,73 @@ public sealed class PcapLanEngine : IAsyncDisposable
         }
     }
 
-    private async Task<DiscoveryRefreshResult> RefreshNeighborsCoreAsync(
-        CancellationToken cancellationToken)
+    private void SeedRememberedInventory()
     {
-        foreach (var device in registry.Peek()
-                     .Where(device => string.IsNullOrWhiteSpace(device.HostName)))
+        foreach (var hint in knownDeviceHints.Where(hint => hint.LastKnownIp is not null))
         {
-            resolvingNames.TryRemove(device.MacAddress.ToString(), out _);
+            registry.Remember(
+                hint.LastKnownIp!,
+                hint.MacAddress,
+                hint.LastSeenUtc ?? DateTimeOffset.MinValue,
+                hint.HostName,
+                hint.LastSeenUtc);
         }
-
-        var clients = clientMappings.Mappings;
-        var activeProfile = profile ??
-            throw new InvalidOperationException("Select and start an adapter before refreshing.");
-        var probeReplies = new ConcurrentDictionary<IPAddress, PhysicalAddress>();
-        var knownReplies = new ConcurrentDictionary<string, IPAddress>(
-            StringComparer.OrdinalIgnoreCase);
-        activeProbeReplies = probeReplies;
-        activeKnownDeviceReplies = knownReplies;
-        int probesSent;
-        try
-        {
-            probesSent = await ProbeSubnetAsync(activeProfile, cancellationToken);
-        }
-        finally
-        {
-            activeProbeReplies = null;
-            activeKnownDeviceReplies = null;
-        }
-
-        foreach (var discovered in probeReplies)
-        {
-            registry.Observe(
-                discovered.Key,
-                discovered.Value,
-                DateTimeOffset.UtcNow,
-                GetKnownHostName(discovered.Value));
-        }
-
-        await RefreshWindowsNeighborCacheAsync(
-            activeProfile,
-            clients,
-            cancellationToken);
-
-        return new DiscoveryRefreshResult(
-            probesSent,
-            probeReplies.Count,
-            clients.Count);
     }
 
-    private async Task RefreshWindowsNeighborCacheAsync(
+    private async Task<int> RefreshWindowsNeighborCacheAsync(
         AdapterProfile activeProfile,
-        ConcurrentDictionary<IPAddress, PhysicalAddress> clients,
         CancellationToken cancellationToken)
     {
         var neighbors = await WindowsNeighborCache.ReadAsync(
             activeProfile,
             cancellationToken);
-        var requestedRealMappings = false;
+        var imported = 0;
         foreach (var neighbor in neighbors)
         {
             if (neighbor.Address.Equals(activeProfile.GatewayAddress))
             {
-                registry.Observe(
+                registry.Remember(
                     neighbor.Address,
                     neighbor.MacAddress,
-                    DateTimeOffset.UtcNow,
+                    DateTimeOffset.MinValue,
                     "Gateway");
                 continue;
             }
 
             if (neighbor.MacAddress.Equals(activeProfile.LocalMac))
             {
-                _ = await WindowsNeighborCache.DeleteAsync(
-                    activeProfile,
-                    neighbor.Address,
-                    cancellationToken);
-                SendArpPacket(
-                    EthernetFrameCodec.BuildArpRequest(
+                var observation = identityMonitor.Observe(
+                    new ArpFrameInfo(
+                        ArpOperation.Reply,
                         activeProfile.LocalMac,
-                        activeProfile.LocalAddress,
-                        neighbor.Address));
-                requestedRealMappings = true;
+                        activeProfile.LocalMac,
+                        neighbor.Address,
+                        PhysicalAddress.None,
+                        activeProfile.LocalAddress),
+                    activeProfile.LocalAddress,
+                    activeProfile.LocalMac,
+                    DateTimeOffset.UtcNow);
+                if (observation.Warning is not null)
+                {
+                    IdentityAlertDetected?.Invoke(this, observation.Warning);
+                }
+
                 continue;
             }
 
-            var needsPoison = clientMappings.Upsert(neighbor.Address, neighbor.MacAddress);
-            frameRouter?.UpdateClient(neighbor.Address, neighbor.MacAddress);
+            // A neighbor-cache entry is historical evidence, not proof that the
+            // device is currently reachable. Keep it in inventory only; do not
+            // add it to the forwarding/interception client map.
             registry.Remember(
                 neighbor.Address,
                 neighbor.MacAddress,
-                DateTimeOffset.UtcNow,
+                DateTimeOffset.MinValue,
                 GetKnownHostName(neighbor.MacAddress));
-            _ = ResolveNameAsync(neighbor.Address, neighbor.MacAddress);
-            if (controlling && needsPoison)
-            {
-                PoisonClient(
-                    new KeyValuePair<IPAddress, PhysicalAddress>(
-                        neighbor.Address,
-                        neighbor.MacAddress));
-            }
+            imported++;
         }
 
-        if (requestedRealMappings)
-        {
-            await Task.Delay(250, cancellationToken);
-        }
+        return imported;
     }
-
-    private async Task<int> ProbeSubnetAsync(
-        AdapterProfile activeProfile,
-        CancellationToken cancellationToken)
-    {
-        var probesSent = 0;
-        var hints = knownDeviceHints
-            .Where(hint => !hint.MacAddress.Equals(activeProfile.LocalMac))
-            .ToArray();
-
-        // Try remembered addresses first. This usually rediscovers a client in
-        // milliseconds without scanning the rest of the subnet.
-        foreach (var hint in hints.Where(hint => hint.LastKnownIp is not null))
-        {
-            SendArpPacket(
-                EthernetFrameCodec.BuildUnicastArpRequest(
-                    activeProfile.LocalMac,
-                    activeProfile.LocalAddress,
-                    hint.MacAddress,
-                    hint.LastKnownIp!));
-            probesSent++;
-        }
-
-        if (hints.Any(hint => hint.LastKnownIp is not null))
-        {
-            await Task.Delay(TimeSpan.FromMilliseconds(150), cancellationToken);
-        }
-
-        foreach (var address in IPv4DiscoveryRange.EnumerateHosts(
-                     activeProfile.LocalAddress,
-                     activeProfile.PrefixLength))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!address.Equals(activeProfile.GatewayAddress))
-            {
-                // Keep ordinary broadcast discovery for wired clients.
-                SendArpPacket(
-                    EthernetFrameCodec.BuildArpRequest(
-                        activeProfile.LocalMac,
-                        activeProfile.LocalAddress,
-                        address));
-                probesSent++;
-
-                // Some inexpensive access points suppress broadcast ARP from
-                // Ethernet to Wi-Fi. Addressing the request directly to a
-                // remembered client MAC crosses those bridges without changing
-                // the router or client ARP tables.
-                foreach (var hint in hints)
-                {
-                    var key = TrafficPolicy.NormalizeMac(hint.MacAddress.ToString());
-                    if (activeKnownDeviceReplies?.ContainsKey(key) == true ||
-                        Equals(hint.LastKnownIp, address))
-                    {
-                        continue;
-                    }
-
-                    SendArpPacket(
-                        EthernetFrameCodec.BuildUnicastArpRequest(
-                            activeProfile.LocalMac,
-                            activeProfile.LocalAddress,
-                            hint.MacAddress,
-                            address));
-                    probesSent++;
-                }
-            }
-
-            // Pace broadcasts so discovery remains invisible to games and calls.
-            await Task.Delay(ProbeInterval, cancellationToken);
-        }
-
-        // Give replies time to reach the ARP capture callback before the snapshot.
-        await Task.Delay(ProbeReplyWindow, cancellationToken);
-        return probesSent;
-    }
-
     public async Task StopAsync()
     {
         await stopSync.WaitAsync();
@@ -590,11 +488,26 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
     private void ObserveArp(ArpFrameInfo arp)
     {
-        var clients = clientMappings.Mappings;
         var activeProfile = profile;
-        if (activeProfile is null ||
+        if (activeProfile is null)
+        {
+            return;
+        }
+
+        var identity = identityMonitor.Observe(
+            arp,
+            activeProfile.LocalAddress,
+            activeProfile.LocalMac,
+            DateTimeOffset.UtcNow);
+        if (identity.Warning is not null)
+        {
+            IdentityAlertDetected?.Invoke(this, identity.Warning);
+        }
+
+        if (identity.IsConflict ||
             !arp.HasConsistentSender ||
             arp.SenderIp.Equals(IPAddress.Any) ||
+            arp.SenderIp.Equals(activeProfile.LocalAddress) ||
             arp.SenderMac.Equals(activeProfile.LocalMac) ||
             IsZeroOrBroadcast(arp.SenderMac))
         {
@@ -609,10 +522,6 @@ public sealed class PcapLanEngine : IAsyncDisposable
         }
 
         var needsPoison = clientMappings.Upsert(arp.SenderIp, arp.SenderMac);
-        activeProbeReplies?.TryAdd(arp.SenderIp, arp.SenderMac);
-        activeKnownDeviceReplies?.TryAdd(
-            TrafficPolicy.NormalizeMac(arp.SenderMac.ToString()),
-            arp.SenderIp);
         frameRouter?.UpdateClient(arp.SenderIp, arp.SenderMac);
         registry.Observe(
             arp.SenderIp,
@@ -689,12 +598,8 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 StringComparison.OrdinalIgnoreCase))?.HostName;
     }
 
-    private async Task RunMaintenanceAsync(CancellationToken cancellationToken)
-    {
-        await Task.WhenAll(
-            RunPoisonLoopAsync(cancellationToken),
-            RunNeighborRefreshLoopAsync(cancellationToken));
-    }
+    private Task RunMaintenanceAsync(CancellationToken cancellationToken) =>
+        RunPoisonLoopAsync(cancellationToken);
 
     private async Task RunPoisonLoopAsync(CancellationToken cancellationToken)
     {
@@ -711,66 +616,6 @@ public sealed class PcapLanEngine : IAsyncDisposable
             poisonTimer.Dispose();
         }
     }
-
-    private async Task RunNeighborRefreshLoopAsync(CancellationToken cancellationToken)
-    {
-        var refreshTimer = new PeriodicTimer(discoveryProfile.RefreshInterval);
-        try
-        {
-            while (await refreshTimer.WaitForNextTickAsync(cancellationToken))
-            {
-                if (discoveryProfile.ProbeSubnetOnRefresh)
-                {
-                    await RefreshNeighborsAsync(cancellationToken);
-                }
-                else
-                {
-                    await RefreshCachedNeighborsAsync(cancellationToken);
-                }
-            }
-        }
-        finally
-        {
-            refreshTimer.Dispose();
-        }
-    }
-
-    private async Task RefreshCachedNeighborsAsync(CancellationToken cancellationToken)
-    {
-        await refreshSync.WaitAsync(cancellationToken);
-        try
-        {
-            var activeProfile = profile;
-            if (activeProfile is null)
-            {
-                return;
-            }
-
-            await RefreshWindowsNeighborCacheAsync(
-                activeProfile,
-                clientMappings.Mappings,
-                cancellationToken);
-            ProbeKnownClients(activeProfile);
-        }
-        finally
-        {
-            refreshSync.Release();
-        }
-    }
-
-    private void ProbeKnownClients(AdapterProfile activeProfile)
-    {
-        foreach (var client in clientMappings.Mappings)
-        {
-            SendArpPacket(
-                EthernetFrameCodec.BuildUnicastArpRequest(
-                    activeProfile.LocalMac,
-                    activeProfile.LocalAddress,
-                    client.Value,
-                    client.Key));
-        }
-    }
-
     private void PoisonClients()
     {
         var clients = clientMappings.Mappings;

@@ -621,7 +621,7 @@
                                     Click="ScanButton_OnClick"
                                     IsEnabled="False"
                                     Visibility="Collapsed"
-                                    Content="Refresh devices" />
+                                    Content="Scan devices" />
                             <Button x:Name="StopButton"
                                     Style="{StaticResource DangerButtonStyle}"
                                     Click="StopButton_OnClick"

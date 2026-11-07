@@ -116,22 +116,38 @@ public sealed class TrafficControlTests
     }
 
     [Fact]
-    public void TrafficPolicy_UnlimitedDevicesUseTwoWayInterceptionForLiveRates()
+    public void TrafficPolicy_DoesNotInterceptDiscoveredOrUnlimitedDevices()
     {
         var policy = new TrafficPolicy();
-        policy.SetRule("00:11:22:33:44:01", new TrafficRule(false, 0, 0));
+        const string mac = "00:11:22:33:44:01";
 
-        Assert.True(policy.RequiresInterception("00:11:22:33:44:01"));
+        Assert.False(policy.RequiresInterception(mac));
+        Assert.Equal(InterceptionTargets.None, policy.GetInterceptionTargets(mac));
+
+        policy.SetRule(mac, new TrafficRule(false, 0, 0));
+        Assert.False(policy.RequiresInterception(mac));
+        Assert.Equal(InterceptionTargets.None, policy.GetInterceptionTargets(mac));
+
+        policy.SetRule(mac, new TrafficRule(false, 100, 0));
+        Assert.True(policy.RequiresInterception(mac));
         Assert.Equal(
             InterceptionTargets.Client | InterceptionTargets.Gateway,
-            policy.GetInterceptionTargets("00:11:22:33:44:01"));
+            policy.GetInterceptionTargets(mac));
+    }
+
+    [Fact]
+    public void TrafficPolicy_BlockedDomainsRequireInterception()
+    {
+        var policy = new TrafficPolicy();
+        policy.SetBlockedDomains("00:11:22:33:44:02", ["example.com"]);
+
         Assert.Equal(
             InterceptionTargets.Client | InterceptionTargets.Gateway,
-            policy.GetInterceptionTargets("00:11:22:33:44:05"));
+            policy.GetInterceptionTargets("00:11:22:33:44:02"));
     }
 
     [Theory]
-    [InlineData(false, 0, 0, InterceptionTargets.Client | InterceptionTargets.Gateway)]
+    [InlineData(false, 0, 0, InterceptionTargets.None)]
     [InlineData(true, 0, 0, InterceptionTargets.Client | InterceptionTargets.Gateway)]
     [InlineData(false, 0, 50, InterceptionTargets.Client | InterceptionTargets.Gateway)]
     [InlineData(false, 100, 0, InterceptionTargets.Client | InterceptionTargets.Gateway)]

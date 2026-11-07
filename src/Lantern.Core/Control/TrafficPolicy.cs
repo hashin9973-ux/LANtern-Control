@@ -44,8 +44,19 @@ public sealed class TrafficPolicy
 
     public InterceptionTargets GetInterceptionTargets(string macAddress)
     {
-        _ = NormalizeMac(macAddress);
-        return InterceptionTargets.Client | InterceptionTargets.Gateway;
+        var macKey = NormalizeMac(macAddress);
+        var hasTrafficRule = rules.TryGetValue(macKey, out var limiters) &&
+            (limiters.Rule.PauseInternet ||
+             limiters.Rule.DownloadKiloBytesPerSecond > 0 ||
+             limiters.Rule.UploadKiloBytesPerSecond > 0);
+        var hasDomainRules = blockedDomains.TryGetValue(macKey, out var domains) &&
+            domains.Length > 0;
+
+        // A discovered device is inventory, not consent to intercept it.
+        // Keep packet interception scoped to an explicit, non-default user rule.
+        return hasTrafficRule || hasDomainRules
+            ? InterceptionTargets.Client | InterceptionTargets.Gateway
+            : InterceptionTargets.None;
     }
 
     public void RemoveRule(string macAddress) => rules.TryRemove(NormalizeMac(macAddress), out _);

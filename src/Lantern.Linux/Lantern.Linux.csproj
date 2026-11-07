@@ -27,7 +27,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\Lantern.App\Services\ArpIdentityMonitor.cs" Link="Shared\ArpIdentityMonitor.cs" />
     <Compile Include="..\Lantern.App\Services\ClientMappingCache.cs" Link="Shared\ClientMappingCache.cs" />
+    <Compile Include="..\Lantern.App\Services\DevicePresencePolicy.cs" Link="Shared\DevicePresencePolicy.cs" />
     <Compile Include="..\Lantern.App\Services\DeviceDomainObservedEventArgs.cs" Link="Shared\DeviceDomainObservedEventArgs.cs" />
     <Compile Include="..\Lantern.App\Services\DeviceIdentityLearnedEventArgs.cs" Link="Shared\DeviceIdentityLearnedEventArgs.cs" />
     <Compile Include="..\Lantern.App\Services\DhcpHostNameParser.cs" Link="Shared\DhcpHostNameParser.cs" />
