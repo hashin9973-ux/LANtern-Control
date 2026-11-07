@@ -230,7 +230,7 @@ public partial class MainWindow : Window
         try
         {
             UpdateKnownDeviceHints();
-            SetStatus("Refreshing saved device history and checking known device addresses...");
+            SetStatus("Reading neighbor cache and starting a paced local IPv4 discovery pass...");
             var result = await engine.ScanDevicesAsync(adapter);
             RefreshDashboard();
             await settingsStore.SaveAsync(settings);

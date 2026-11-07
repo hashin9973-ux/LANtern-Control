@@ -1,7 +1,7 @@
 <Project Sdk="WixToolset.Sdk/5.0.2">
   <PropertyGroup>
     <OutputType>Package</OutputType>
-    <OutputName>LANtern-Control-Setup-v0.1.5</OutputName>
+    <OutputName>LANtern-Control-Setup-v0.1.6</OutputName>
     <OutputPath>..\packaging\wix\</OutputPath>
     <InstallerPlatform>x64</InstallerPlatform>
     <Cultures>en-US</Cultures>

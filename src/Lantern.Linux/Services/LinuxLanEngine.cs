@@ -22,6 +22,7 @@ public sealed class LinuxLanEngine : IAsyncDisposable
     private readonly ArpIdentityMonitor identityMonitor = new();
     private readonly ConcurrentDictionary<IPAddress, DateTimeOffset> lastPresenceProbeAt = new();
     private DateTimeOffset lastPresenceProbeBatchAt = DateTimeOffset.MinValue;
+    private DateTimeOffset lastDiscoveryProbeBatchAt = DateTimeOffset.MinValue;
     private string? presenceProbeAdapterId;
     private readonly ResolvedDeviceNameClaims resolvedNameClaims = new(Dns.GetHostName());
     private ConcurrentDictionary<IPAddress, PhysicalAddress> clients => clientMappings.Mappings;
@@ -258,10 +259,11 @@ public sealed class LinuxLanEngine : IAsyncDisposable
             string? probeWarning = null;
             try
             {
-                probesSent = await ProbeKnownAddressesAsync(
+                probesSent = await ProbeAddressesAsync(
                     selectedAdapter,
                     force: true,
-                    cancellationToken);
+                    cancellationToken,
+                    discoverSubnet: true);
             }
             catch (Exception exception) when (
                 !IsRunning && exception is not OperationCanceledException)
@@ -294,10 +296,11 @@ public sealed class LinuxLanEngine : IAsyncDisposable
         }
     }
 
-    private async Task<int> ProbeKnownAddressesAsync(
+    private async Task<int> ProbeAddressesAsync(
         AdapterProfile activeProfile,
         bool force,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool discoverSubnet = false)
     {
         if (!string.Equals(
                 presenceProbeAdapterId,
@@ -306,32 +309,74 @@ public sealed class LinuxLanEngine : IAsyncDisposable
         {
             lastPresenceProbeAt.Clear();
             lastPresenceProbeBatchAt = DateTimeOffset.MinValue;
+            lastDiscoveryProbeBatchAt = DateTimeOffset.MinValue;
             presenceProbeAdapterId = activeProfile.Id;
         }
 
         var now = DateTimeOffset.UtcNow;
-        if (lastPresenceProbeBatchAt != DateTimeOffset.MinValue &&
-            now >= lastPresenceProbeBatchAt &&
-            now - lastPresenceProbeBatchAt < DeviceProbePolicy.ProbeInterval)
+        var previousBatchAt = discoverSubnet
+            ? lastDiscoveryProbeBatchAt
+            : lastPresenceProbeBatchAt;
+        var minimumInterval = discoverSubnet
+            ? DeviceProbePolicy.DiscoveryInterval
+            : DeviceProbePolicy.ProbeInterval;
+        if (previousBatchAt != DateTimeOffset.MinValue &&
+            now >= previousBatchAt &&
+            now - previousBatchAt < minimumInterval)
         {
             return 0;
         }
 
-        var targets = DeviceProbePolicy.GetTargets(
-            registry.Peek(),
-            activeProfile,
-            now,
-            force,
-            lastPresenceProbeAt);
+        var targets = discoverSubnet
+            ? DeviceProbePolicy.GetDiscoveryTargets(activeProfile)
+            : DeviceProbePolicy.GetTargets(
+                registry.Peek(),
+                activeProfile,
+                now,
+                force,
+                lastPresenceProbeAt);
         if (targets.Count == 0)
         {
             return 0;
         }
 
-        lastPresenceProbeBatchAt = now;
+        var requestSpacing = discoverSubnet
+            ? DeviceProbePolicy.DiscoveryRequestSpacing
+            : DeviceProbePolicy.RequestSpacing;
+        Action<int, int>? progress = discoverSubnet
+            ? (completed, total) => RaiseStatus(
+                $"Local IPv4 discovery: checked {completed} of {total} host addresses.")
+            : null;
+        if (discoverSubnet)
+        {
+            RaiseStatus(
+                $"Starting a paced one-pass local IPv4 discovery: 0 of {targets.Count} host addresses checked.");
+        }
+
+        void MarkBatchStarted()
+        {
+            if (discoverSubnet)
+            {
+                lastDiscoveryProbeBatchAt = DateTimeOffset.UtcNow;
+            }
+            else
+            {
+                lastPresenceProbeBatchAt = DateTimeOffset.UtcNow;
+            }
+        }
+
+        void MarkBatchCompleted()
+        {
+            if (discoverSubnet)
+            {
+                lastDiscoveryProbeBatchAt = DateTimeOffset.UtcNow;
+            }
+        }
+
         if (arpDevice is not null && injectionDevice is not null)
         {
-            return await SendPresenceProbesAsync(
+            MarkBatchStarted();
+            var sent = await SendPresenceProbesAsync(
                 (address, bytes) =>
                 {
                     SendArpPacket(bytes);
@@ -339,7 +384,11 @@ public sealed class LinuxLanEngine : IAsyncDisposable
                 },
                 activeProfile,
                 targets,
-                cancellationToken);
+                cancellationToken,
+                requestSpacing,
+                progress);
+            MarkBatchCompleted();
+            return sent;
         }
 
         var captureDevice = LibPcapLiveDeviceList.Instance
@@ -367,7 +416,9 @@ public sealed class LinuxLanEngine : IAsyncDisposable
 
             probeInjector.Open(LinuxCaptureConfiguration.CreateForForwarding());
             injectorOpened = true;
-            return await SendPresenceProbesAsync(
+
+            MarkBatchStarted();
+            var sent = await SendPresenceProbesAsync(
                 (address, bytes) =>
                 {
                     lock (injectionSync)
@@ -379,7 +430,11 @@ public sealed class LinuxLanEngine : IAsyncDisposable
                 },
                 activeProfile,
                 targets,
-                cancellationToken);
+                cancellationToken,
+                requestSpacing,
+                progress);
+            MarkBatchCompleted();
+            return sent;
         }
         finally
         {
@@ -415,9 +470,12 @@ public sealed class LinuxLanEngine : IAsyncDisposable
         Action<IPAddress, byte[]> sendProbe,
         AdapterProfile activeProfile,
         IReadOnlyList<IPAddress> targets,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeSpan? requestSpacing = null,
+        Action<int, int>? progress = null)
     {
         var sent = 0;
+        var spacing = requestSpacing ?? DeviceProbePolicy.RequestSpacing;
         foreach (var address in targets)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -428,7 +486,12 @@ public sealed class LinuxLanEngine : IAsyncDisposable
                     activeProfile.LocalAddress,
                     address));
             sent++;
-            await Task.Delay(DeviceProbePolicy.RequestSpacing, cancellationToken);
+            if (progress is not null && (sent % 20 == 0 || sent == targets.Count))
+            {
+                progress(sent, targets.Count);
+            }
+
+            await Task.Delay(spacing, cancellationToken);
         }
 
         if (sent > 0)
@@ -925,7 +988,7 @@ public sealed class LinuxLanEngine : IAsyncDisposable
             await refreshSync.WaitAsync(cancellationToken);
             try
             {
-                await ProbeKnownAddressesAsync(
+                await ProbeAddressesAsync(
                     activeProfile,
                     force: false,
                     cancellationToken);

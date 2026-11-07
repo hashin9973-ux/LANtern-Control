@@ -5,8 +5,8 @@ using Lantern.Core.Networking;
 namespace Lantern.App.Services;
 
 /// <summary>
-/// Selects only previously observed host addresses for low-rate presence checks.
-/// It never enumerates or probes unknown addresses across the subnet.
+/// Selects known addresses for low-rate presence checks and, separately,
+/// candidate addresses for an explicitly requested local-network discovery pass.
 /// </summary>
 public static class DeviceProbePolicy
 {
@@ -20,8 +20,18 @@ public static class DeviceProbePolicy
 
     public static TimeSpan RequestSpacing { get; } = TimeSpan.FromMilliseconds(150);
 
+    public static TimeSpan DiscoveryRequestSpacing { get; } = TimeSpan.FromMilliseconds(200);
+
+    public static TimeSpan DiscoveryInterval { get; } = TimeSpan.FromSeconds(60);
+
+    public const int MaxDiscoveryTargetsPerScan = 253;
+
     public static TimeSpan ReplyWindow { get; } = TimeSpan.FromMilliseconds(900);
 
+    /// <summary>
+    /// Selects only previously observed host addresses for automatic presence checks.
+    /// This method never enumerates unknown addresses across the subnet.
+    /// </summary>
     public static IReadOnlyList<IPAddress> GetTargets(
         IEnumerable<DeviceSnapshot> inventory,
         AdapterProfile adapter,
@@ -58,6 +68,26 @@ public static class DeviceProbePolicy
             .ThenBy(device => ToUInt32(device.IpAddress))
             .Take(MaxTargetsPerBatch)
             .Select(device => device.IpAddress)
+            .ToArray();
+    }
+
+    /// <summary>
+    /// Returns a bounded, one-pass list for a user-requested discovery scan.
+    /// Larger networks are already constrained to the local /24 by
+    /// IPv4DiscoveryRange. The controller and gateway are never probed.
+    /// </summary>
+    public static IReadOnlyList<IPAddress> GetDiscoveryTargets(AdapterProfile adapter)
+    {
+        ArgumentNullException.ThrowIfNull(adapter);
+
+        return IPv4DiscoveryRange
+            .EnumerateHosts(adapter.LocalAddress, adapter.PrefixLength)
+            .Where(address =>
+                !address.Equals(adapter.LocalAddress) &&
+                !address.Equals(adapter.GatewayAddress))
+            .Distinct()
+            .OrderBy(ToUInt32)
+            .Take(MaxDiscoveryTargetsPerScan)
             .ToArray();
     }
 
