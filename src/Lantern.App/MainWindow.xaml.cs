@@ -255,6 +255,64 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void ClearDeviceCacheButton_OnClick(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        if (operationInProgress)
+        {
+            return;
+        }
+
+        var offlineDevices = Devices
+            .Where(device => !device.IsOnline && !device.IsProtected)
+            .ToArray();
+        if (offlineDevices.Length == 0)
+        {
+            DetailStatusText.Text = "No offline device cache entries to clear.";
+            return;
+        }
+
+        operationInProgress = true;
+        UpdateButtons();
+        try
+        {
+            foreach (var device in offlineDevices)
+            {
+                var macAddress = PhysicalAddress.Parse(device.MacAddress);
+                engine.ForgetDevice(macAddress);
+                registry.Remove(macAddress);
+                if (settings.Devices.TryGetValue(device.MacKey, out var preferences))
+                {
+                    preferences.LastKnownIp = null;
+                    preferences.LastSeenUtc = null;
+                }
+
+                deviceIndex.Remove(device.MacKey);
+                Devices.Remove(device);
+            }
+
+            UpdateKnownDeviceHints();
+            settingsDirty = true;
+            await SaveSettingsIfDirtyAsync();
+            RefreshDevices(null, EventArgs.Empty);
+            SetStatus(
+                $"Cleared {offlineDevices.Length} offline device cache entr" +
+                $"{(offlineDevices.Length == 1 ? "y" : "ies")}. Saved names and rules were preserved.",
+                true);
+        }
+        catch (Exception exception) when (
+            exception is IOException or InvalidOperationException or FormatException)
+        {
+            SetStatus($"Could not clear the device cache: {exception.Message}", false);
+        }
+        finally
+        {
+            operationInProgress = false;
+            UpdateButtons();
+        }
+    }
+
     private void ClearActivityButton_OnClick(object sender, RoutedEventArgs eventArgs)
     {
         ClearObservedActivity();
@@ -1068,6 +1126,7 @@ public partial class MainWindow : Window
         StopButton.IsEnabled = !operationInProgress && engine.IsRunning;
         ScanButton.IsEnabled = !operationInProgress &&
                                AdapterSelector.SelectedItem is AdapterProfile;
+        ClearDeviceCacheButton.IsEnabled = !operationInProgress;
         AdapterSelector.IsEnabled = !operationInProgress && !engine.IsRunning;
         StartButton.Visibility = engine.IsRunning ? Visibility.Collapsed : Visibility.Visible;
         ScanButton.Visibility = AdapterSelector.SelectedItem is AdapterProfile
