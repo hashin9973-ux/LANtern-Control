@@ -12,6 +12,8 @@ public static class DeviceProbePolicy
 {
     public static TimeSpan ProbeInterval { get; } = TimeSpan.FromSeconds(60);
 
+    public static TimeSpan MinimumTimeBetweenProbes { get; } = TimeSpan.FromSeconds(60);
+
     public static TimeSpan MinimumAgeBeforeProbe { get; } = TimeSpan.FromSeconds(45);
 
     public static TimeSpan RequestSpacing { get; } = TimeSpan.FromMilliseconds(150);
@@ -22,7 +24,8 @@ public static class DeviceProbePolicy
         IEnumerable<DeviceSnapshot> inventory,
         AdapterProfile adapter,
         DateTimeOffset now,
-        bool force)
+        bool force,
+        IReadOnlyDictionary<IPAddress, DateTimeOffset>? lastProbeAt = null)
     {
         ArgumentNullException.ThrowIfNull(inventory);
         ArgumentNullException.ThrowIfNull(adapter);
@@ -36,6 +39,10 @@ public static class DeviceProbePolicy
                 !device.IpAddress.Equals(adapter.LocalAddress) &&
                 !device.IpAddress.Equals(adapter.GatewayAddress) &&
                 localHosts.Contains(device.IpAddress))
+            .Where(device =>
+                lastProbeAt is null ||
+                !lastProbeAt.TryGetValue(device.IpAddress, out var previousProbe) ||
+                (now >= previousProbe && now - previousProbe >= MinimumTimeBetweenProbes))
             .Where(device =>
                 force ||
                 device.LastSeen == DateTimeOffset.MinValue ||
