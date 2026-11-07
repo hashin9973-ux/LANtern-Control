@@ -345,11 +345,15 @@ public sealed class PcapLanEngine : IAsyncDisposable
         temporaryProbeTargets = targets.ToHashSet();
         temporaryProbeIdentityMonitor = new ArpIdentityMonitor();
         captureDevice.OnPacketArrival += OnTemporaryPresencePacketArrival;
+        var captureOpened = false;
+        var captureStarted = false;
         try
         {
             captureDevice.Open(PcapCaptureConfiguration.CreateForArpDiscovery());
+            captureOpened = true;
             captureDevice.Filter = "arp";
             captureDevice.StartCapture();
+            captureStarted = true;
 
             return await SendPresenceProbesAsync(
                 bytes =>
@@ -365,16 +369,23 @@ public sealed class PcapLanEngine : IAsyncDisposable
         }
         finally
         {
-            try
+            if (captureStarted)
             {
-                captureDevice.StopCapture();
-            }
-            catch (InvalidOperationException)
-            {
+                try
+                {
+                    captureDevice.StopCapture();
+                }
+                catch (InvalidOperationException)
+                {
+                }
             }
 
             captureDevice.OnPacketArrival -= OnTemporaryPresencePacketArrival;
-            captureDevice.Close();
+            if (captureOpened)
+            {
+                captureDevice.Close();
+            }
+
             temporaryProbeProfile = null;
             temporaryProbeTargets = null;
             temporaryProbeIdentityMonitor = null;
