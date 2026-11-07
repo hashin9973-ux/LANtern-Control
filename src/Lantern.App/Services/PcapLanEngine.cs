@@ -36,6 +36,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private KnownDeviceHint[] knownDeviceHints = [];
     private AdapterProfile? temporaryProbeProfile;
     private HashSet<IPAddress>? temporaryProbeTargets;
+    private ConcurrentDictionary<IPAddress, byte>? temporaryProbeResponders;
     private ArpIdentityMonitor? temporaryProbeIdentityMonitor;
     private string[] rejectedResolvedNames = [];
     private string? backgroundFailure;
@@ -223,14 +224,21 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 selectedAdapter,
                 cancellationToken);
             var probesSent = 0;
+            var devicesResponded = 0;
+            var retryRequestsSent = 0;
+            var candidateHosts = 0;
             string? probeWarning = null;
             try
             {
-                probesSent = await ProbeAddressesAsync(
+                var probeResult = await ProbeAddressesAsync(
                     selectedAdapter,
                     force: true,
                     cancellationToken,
                     discoverSubnet: true);
+                probesSent = probeResult.RequestsSent;
+                devicesResponded = probeResult.DevicesResponded;
+                retryRequestsSent = probeResult.RetryRequestsSent;
+                candidateHosts = probeResult.CandidateHosts;
             }
             catch (Exception exception) when (
                 !IsRunning && exception is not OperationCanceledException)
@@ -242,7 +250,10 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 cachedEntries,
                 registry.Peek().Count,
                 probesSent,
-                probeWarning);
+                probeWarning,
+                devicesResponded,
+                retryRequestsSent,
+                candidateHosts);
         }
         finally
         {
@@ -317,7 +328,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
         return imported;
     }
-    private async Task<int> ProbeAddressesAsync(
+    private async Task<DiscoveryProbeResult> ProbeAddressesAsync(
         AdapterProfile activeProfile,
         bool force,
         CancellationToken cancellationToken,
@@ -345,7 +356,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             now >= previousBatchAt &&
             now - previousBatchAt < minimumInterval)
         {
-            return 0;
+            return DiscoveryProbeResult.Empty;
         }
 
         var targets = discoverSubnet
@@ -358,7 +369,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 lastPresenceProbeAt);
         if (targets.Count == 0)
         {
-            return 0;
+            return DiscoveryProbeResult.Empty;
         }
 
         var requestSpacing = discoverSubnet
@@ -371,8 +382,10 @@ public sealed class PcapLanEngine : IAsyncDisposable
         if (discoverSubnet)
         {
             RaiseStatus(
-                $"Starting a paced one-pass local IPv4 discovery: 0 of {targets.Count} host addresses checked.");
+                $"Starting a paced local IPv4 discovery: 0 of {targets.Count} host addresses checked.");
         }
+
+        var responders = new ConcurrentDictionary<IPAddress, byte>();
 
         void MarkBatchStarted()
         {
@@ -394,22 +407,73 @@ public sealed class PcapLanEngine : IAsyncDisposable
             }
         }
 
-        if (arpDevice is not null)
+        async Task<DiscoveryProbeResult> SendBatchesAsync(
+            Action<IPAddress, byte[]> sendProbe)
         {
             MarkBatchStarted();
-            var sent = await SendPresenceProbesAsync(
-                (address, bytes) =>
-                {
-                    SendArpPacket(bytes);
-                    lastPresenceProbeAt[address] = DateTimeOffset.UtcNow;
-                },
+            var firstPassSent = await SendPresenceProbesAsync(
+                sendProbe,
                 activeProfile,
                 targets,
                 cancellationToken,
                 requestSpacing,
                 progress);
+
+            var retryTargets = discoverSubnet
+                ? targets.Where(address => !responders.ContainsKey(address)).ToArray()
+                : [];
+            var retrySent = 0;
+            if (retryTargets.Length > 0)
+            {
+                RaiseStatus(
+                    $"Retrying {retryTargets.Length} addresses that did not answer the first ARP request.");
+                retrySent = await SendPresenceProbesAsync(
+                    sendProbe,
+                    activeProfile,
+                    retryTargets,
+                    cancellationToken,
+                    DeviceProbePolicy.DiscoveryRetrySpacing,
+                    (completed, total) =>
+                    {
+                        if (completed % 20 == 0 || completed == total)
+                        {
+                            RaiseStatus(
+                                $"Local IPv4 discovery retry: checked {completed} of {total} unanswered addresses.");
+                        }
+                    });
+            }
+
             MarkBatchCompleted();
-            return sent;
+            return new DiscoveryProbeResult(
+                firstPassSent + retrySent,
+                retrySent,
+                responders.Count,
+                discoverSubnet ? targets.Count : 0);
+        }
+
+        if (arpDevice is not null)
+        {
+            if (discoverSubnet)
+            {
+                BeginTemporaryProbeContext(activeProfile, targets, responders, createIdentityMonitor: false);
+            }
+
+            try
+            {
+                return await SendBatchesAsync(
+                    (address, bytes) =>
+                    {
+                        SendArpPacket(bytes);
+                        lastPresenceProbeAt[address] = DateTimeOffset.UtcNow;
+                    });
+            }
+            finally
+            {
+                if (discoverSubnet)
+                {
+                    EndTemporaryProbeContext();
+                }
+            }
         }
 
         await NpfDriverService.EnsureAvailableAsync(cancellationToken);
@@ -418,9 +482,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             ?? throw new InvalidOperationException(
                 $"Npcap could not find adapter “{activeProfile.Name}” for device presence checks.");
 
-        temporaryProbeProfile = activeProfile;
-        temporaryProbeTargets = targets.ToHashSet();
-        temporaryProbeIdentityMonitor = new ArpIdentityMonitor();
+        BeginTemporaryProbeContext(activeProfile, targets, responders, createIdentityMonitor: true);
         captureDevice.OnPacketArrival += OnTemporaryPresencePacketArrival;
         var captureOpened = false;
         var captureStarted = false;
@@ -432,8 +494,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             captureDevice.StartCapture();
             captureStarted = true;
 
-            MarkBatchStarted();
-            var sent = await SendPresenceProbesAsync(
+            return await SendBatchesAsync(
                 (address, bytes) =>
                 {
                     lock (arpSendSync)
@@ -442,14 +503,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
                     }
 
                     lastPresenceProbeAt[address] = DateTimeOffset.UtcNow;
-                },
-                activeProfile,
-                targets,
-                cancellationToken,
-                requestSpacing,
-                progress);
-            MarkBatchCompleted();
-            return sent;
+                });
         }
         finally
         {
@@ -470,10 +524,30 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 captureDevice.Close();
             }
 
-            temporaryProbeProfile = null;
-            temporaryProbeTargets = null;
-            temporaryProbeIdentityMonitor = null;
+            EndTemporaryProbeContext();
         }
+    }
+
+    private void BeginTemporaryProbeContext(
+        AdapterProfile activeProfile,
+        IReadOnlyList<IPAddress> targets,
+        ConcurrentDictionary<IPAddress, byte> responders,
+        bool createIdentityMonitor)
+    {
+        temporaryProbeProfile = activeProfile;
+        temporaryProbeTargets = targets.ToHashSet();
+        temporaryProbeIdentityMonitor = createIdentityMonitor
+            ? new ArpIdentityMonitor()
+            : null;
+        temporaryProbeResponders = responders;
+    }
+
+    private void EndTemporaryProbeContext()
+    {
+        temporaryProbeProfile = null;
+        temporaryProbeTargets = null;
+        temporaryProbeIdentityMonitor = null;
+        temporaryProbeResponders = null;
     }
 
     private static async Task<int> SendPresenceProbesAsync(
@@ -543,6 +617,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
         if (!identity.IsConflict)
         {
+            temporaryProbeResponders?.TryAdd(arp.SenderIp, 0);
             registry.Observe(
                 arp.SenderIp,
                 arp.SenderMac,
@@ -782,6 +857,13 @@ public sealed class PcapLanEngine : IAsyncDisposable
             IsZeroOrBroadcast(arp.SenderMac))
         {
             return;
+        }
+
+        if (arp.Operation == ArpOperation.Reply &&
+            arp.TargetIp.Equals(activeProfile.LocalAddress) &&
+            temporaryProbeTargets?.Contains(arp.SenderIp) == true)
+        {
+            temporaryProbeResponders?.TryAdd(arp.SenderIp, 0);
         }
 
         if (arp.SenderIp.Equals(activeProfile.GatewayAddress))

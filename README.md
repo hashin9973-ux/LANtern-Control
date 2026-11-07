@@ -4,7 +4,7 @@
 
 # LANtern Control — Open-Source SelfishNet Alternative for Windows and Linux
 
-<a href="https://github.com/hashin9973-ux/LANtern-Control/releases/latest"><img alt="Release v0.1.6" src="https://img.shields.io/badge/release-v0.1.6-C51B3A?style=flat-square"></a>
+<a href="https://github.com/hashin9973-ux/LANtern-Control/releases/latest"><img alt="Release v0.1.7" src="https://img.shields.io/badge/release-v0.1.7-C51B3A?style=flat-square"></a>
 <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-C51B3A?style=flat-square"></a>
 <img alt="C#" src="https://img.shields.io/badge/language-C%23-239120?style=flat-square&amp;logo=csharp">
 <img alt=".NET 8" src="https://img.shields.io/badge/.NET-8.0-512BD4?style=flat-square&amp;logo=dotnet">
@@ -23,7 +23,7 @@ alternative with a modern desktop interface, LANtern Control is built for that
 use case.
 
 > [!IMPORTANT]
-> Windows `v0.1.6` is the current release. Linux `v0.1.0` is available as a
+> Windows `v0.1.7` is the current release. Linux `v0.1.0` is available as a
 > public beta AppImage. **macOS remains a work in progress (WIP).**
 
 ## Features
@@ -97,7 +97,7 @@ Download the latest version from [GitHub Releases](https://github.com/hashin9973
 
 ### Windows installer
 
-1. Download `LANtern-Control-Setup-v0.1.6.msi`.
+1. Download `LANtern-Control-Setup-v0.1.7.msi`.
 2. Run the setup program.
 3. Choose the installation folder and whether to create Start Menu or desktop
    shortcuts.
@@ -105,7 +105,7 @@ Download the latest version from [GitHub Releases](https://github.com/hashin9973
 
 ### Windows portable version
 
-1. Download `LANtern-Control-v0.1.6-win-x64.zip`.
+1. Download `LANtern-Control-v0.1.7-win-x64.zip`.
 2. Extract the complete archive to a folder where it can remain.
 3. Run `LANtern Control.exe` as Administrator from that folder. Keep the
    extracted files together; no application installation is required.
@@ -144,8 +144,9 @@ disconnecting the selected adapter, suspending, or rebooting.
 2. Select the network adapter whose local IP address and gateway match the
    network you want to manage.
 3. Click **Scan devices** to read the neighbor cache and saved device history,
-   then run one paced discovery pass across the selected local IPv4 segment.
-   This scan is available before starting control and is limited to once per minute.
+   then run a paced discovery pass across the selected local IPv4 segment.
+   LANtern retries addresses that did not answer the first request and shows
+   how many hosts replied. A scan is limited to once per minute.
 4. Click **Start control** to enable the selected device rules and live capture.
 5. Enter a download or upload limit in `KB/s`. A value of `0` means unlimited.
 6. Use the **Internet** switch to pause or restore a device's connection.
@@ -174,12 +175,15 @@ change the router configuration.
 
 **Scan devices** reads the selected adapter's OS neighbor cache and merges
 saved device identities, then performs one user-requested, paced ARP discovery
-pass across the controller's local IPv4 segment. It sends one request per
-candidate host address, at 200 ms intervals, excluding the controller and
-gateway. Discovery is limited to the local /24 on larger networks and at most
-253 candidate addresses per scan. A manual discovery pass can run no more than
-once per minute per adapter. This lets an empty cache be repopulated without
-turning discovery into a continuous background sweep.
+pass across the controller's local IPv4 segment. It sends one ARP request per
+candidate host address at 200 ms intervals, excluding the controller and
+gateway, then retries only addresses that did not answer at 150 ms intervals.
+Discovery is limited to the local /24 on larger networks and at most 253
+candidate addresses per scan. A manual discovery pass can run no more than once
+per minute per adapter. The result reports the number of validated ARP replies
+and retries sent, so a partial result is distinguishable from a scan that
+could not start. This lets an empty cache be repopulated without turning
+discovery into a continuous background sweep.
 
 While control is running, automatic presence checks remain separate: they
 target only previously known IP addresses that have not been observed for at
@@ -194,8 +198,10 @@ ARP reply or observes its traffic. A known device is treated as online for up
 to 120 seconds after its last observation, allowing quiet devices time to
 answer a paced presence check. After missed checks, it is shown as offline.
 Offline history with a real last-seen timestamp is retained for up to 30 days.
-Use **Clear device cache** to remove offline rows; saved aliases, limits, and
-domain rules are kept.
+Use **Clear device cache** to remove offline rows and OS neighbor entries.
+Saved IP/MAC identities, last-seen timestamps, aliases, limits, and domain rules
+are retained, so known unavailable devices can appear as offline again on a
+later scan.
 
 LANtern raises a **Potential ARP identity conflict** warning when passive
 observations show inconsistent Ethernet/ARP sender addresses, an IP address
@@ -265,7 +271,7 @@ enable WinPcap API-compatible mode if offered, and restart LANtern Control.
 - Make sure the controller and devices are on the same normal LAN, not an
   isolated guest network.
 - Run LANtern Control as Administrator.
-- Click **Scan devices** to run one paced discovery pass across the selected local IPv4 segment. A manual pass is limited to once per minute.
+- Click **Scan devices** to run a paced discovery pass with one retry for unanswered hosts. The app reports the number of ARP replies; a manual pass is limited to once per minute.
 
 ### A device loses connectivity
 

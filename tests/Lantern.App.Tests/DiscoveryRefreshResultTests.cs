@@ -6,12 +6,19 @@ namespace Lantern.App.Tests;
 public sealed class DiscoveryRefreshResultTests
 {
     [Fact]
-    public void StatusMessage_ReportsPacedLocalNetworkDiscovery()
+    public void StatusMessage_ReportsValidatedResponsesAndRetries()
     {
-        var result = new DiscoveryRefreshResult(3, 4, 4);
+        var result = new DiscoveryRefreshResult(
+            3,
+            7,
+            498,
+            DevicesResponded: 6,
+            RetryRequestsSent: 246,
+            CandidateHosts: 252);
 
         Assert.Equal(
-            "Device inventory refreshed — 3 neighbor-cache entries, 4 known devices; 4 paced ARP discovery requests sent across the selected local IPv4 segment.",
+            "Device inventory refreshed — 3 neighbor-cache entries, 7 known devices. " +
+            "ARP replies received from 6 of 252 candidate addresses after 498 paced requests (246 retries).",
             result.StatusMessage);
     }
 
@@ -33,5 +40,13 @@ public sealed class DiscoveryRefreshResultTests
         Assert.Equal(
             "Device inventory refreshed — 3 neighbor-cache entries, 4 known devices. Local-network discovery was unavailable: Npcap is not available.",
             result.StatusMessage);
+    }
+
+    [Fact]
+    public void EmptyProbeResult_ContainsNoRequestsOrResponses()
+    {
+        Assert.Equal(
+            new DiscoveryProbeResult(0, 0, 0, 0),
+            DiscoveryProbeResult.Empty);
     }
 }

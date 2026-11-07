@@ -22,6 +22,8 @@ public static class DeviceProbePolicy
 
     public static TimeSpan DiscoveryRequestSpacing { get; } = TimeSpan.FromMilliseconds(200);
 
+    public static TimeSpan DiscoveryRetrySpacing { get; } = TimeSpan.FromMilliseconds(150);
+
     public static TimeSpan DiscoveryInterval { get; } = TimeSpan.FromSeconds(60);
 
     public const int MaxDiscoveryTargetsPerScan = 253;

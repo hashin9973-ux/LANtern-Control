@@ -301,12 +301,6 @@ public partial class MainWindow : Window
                 var macAddress = PhysicalAddress.Parse(device.MacKey);
                 engine.ForgetDevice(macAddress);
                 registry.Remove(macAddress);
-                if (settings.Devices.TryGetValue(device.MacKey, out var preferences))
-                {
-                    preferences.LastKnownIp = null;
-                    preferences.LastSeenUtc = null;
-                }
-
                 deviceIndex.Remove(device.MacKey);
                 Devices.Remove(device);
             }
@@ -323,7 +317,7 @@ public partial class MainWindow : Window
             SetStatus(
                 $"Cleared {offlineDevices.Length} offline device cache entr" +
                 $"{(offlineDevices.Length == 1 ? "y" : "ies")}. {cacheNote} " +
-                "Saved names and rules were preserved.",
+                "Saved IP/MAC history, names, and rules were retained for future offline checks.",
                 true);
         }
         catch (Exception exception) when (
