@@ -10,6 +10,12 @@ public sealed class AppSettings
 
     public int AutoScanIntervalSeconds { get; set; } = 60;
 
+    public bool ScriptAutomationEnabled { get; set; }
+
+    public int ScriptAutomationIntervalSeconds { get; set; } = 60;
+
+    public string? ScriptAutomationPath { get; set; }
+
     public Dictionary<string, DevicePreferences> Devices { get; init; } =
         new(StringComparer.OrdinalIgnoreCase);
 
