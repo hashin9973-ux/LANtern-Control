@@ -21,6 +21,16 @@ public sealed class ArpIdentityMonitor
     private readonly Dictionary<string, DateTimeOffset> lastAlerts =
         new(StringComparer.Ordinal);
 
+    public void Reset()
+    {
+        lock (sync)
+        {
+            claimsByIp.Clear();
+            claimsByMac.Clear();
+            lastAlerts.Clear();
+        }
+    }
+
     public ArpIdentityObservation Observe(
         ArpFrameInfo arp,
         IPAddress controllerAddress,
