@@ -1971,6 +1971,7 @@
                                    FontSize="10"
                                    FontWeight="SemiBold" />
                         <TextBox x:Name="ScriptEditorTextBox"
+                                 Height="280"
                                  MinHeight="240"
                                  Margin="0,8,0,0"
                                  Padding="12"
