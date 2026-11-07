@@ -112,7 +112,7 @@ public sealed class LocalMulticastDiscoveryService
 
         var statusLine = packet[..lineEnd];
         return statusLine.StartsWith("HTTP/1.1 200 "u8) ||
-               statusLine.StartsWith("HTTP/1.0 200 ");
+               statusLine.StartsWith("HTTP/1.0 200 "u8);
     }
 
     public static bool IsMdnsServiceBrowseResponse(
