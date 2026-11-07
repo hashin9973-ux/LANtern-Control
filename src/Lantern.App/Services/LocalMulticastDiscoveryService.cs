@@ -121,7 +121,7 @@ public sealed class LocalMulticastDiscoveryService
         }
 
         var headers = Encoding.ASCII.GetString(packet[(lineEnd + 2)..]);
-        foreach (var header in headers.Split("\\r\\n", StringSplitOptions.RemoveEmptyEntries))
+        foreach (var header in headers.Split("\r\n", StringSplitOptions.RemoveEmptyEntries))
         {
             var separator = header.IndexOf(':');
             if (separator < 0)
