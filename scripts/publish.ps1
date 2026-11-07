@@ -10,7 +10,7 @@ $installerProject = Join-Path $projectRoot "installer\LanternControl.wixproj"
 $installerVerification = Join-Path $projectRoot "scripts\verify-msi-installer.ps1"
 $projectFile = Join-Path $projectRoot "src\Lantern.App\Lantern.App.csproj"
 $solutionFile = Join-Path $projectRoot "LanternControl.slnx"
-$releaseVersion = "0.1.3"
+$releaseVersion = "0.1.4"
 
 dotnet test $solutionFile -c $Configuration
 if ($LASTEXITCODE -ne 0) {
@@ -25,6 +25,9 @@ if ($LASTEXITCODE -ne 0) {
 if (Test-Path -LiteralPath $publishDirectory) {
     Remove-Item -LiteralPath $publishDirectory -Recurse -Force
 }
+
+$outputDirectory = Join-Path $projectRoot "outputs"
+New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
 
 dotnet publish $projectFile `
     -c $Configuration `
