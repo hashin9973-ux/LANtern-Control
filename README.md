@@ -143,8 +143,9 @@ disconnecting the selected adapter, suspending, or rebooting.
    configured AppImage normally after completing its one-time setup.
 2. Select the network adapter whose local IP address and gateway match the
    network you want to manage.
-3. Click **Scan devices** to read the adapter's neighbor cache and saved
-   device history. This inventory refresh is available before starting control.
+3. Click **Scan devices** to read the neighbor cache and saved device history,
+   then run one paced discovery pass across the selected local IPv4 segment.
+   This scan is available before starting control and is limited to once per minute.
 4. Click **Start control** to enable the selected device rules and live capture.
 5. Enter a download or upload limit in `KB/s`. A value of `0` means unlimited.
 6. Use the **Internet** switch to pause or restore a device's connection.
@@ -205,14 +206,13 @@ A device that perfectly copies both another device's MAC and IP cannot be
 identified reliably by a passive listener alone. Router/AP association tables,
 DHCP lease history, or managed-switch telemetry provide stronger evidence.
 
-Software cannot increase Wi-Fi radio range or scan through walls. Live
-discovery is limited by the selected adapter's radio coverage, the local
-Layer-2 network, access-point isolation, VLAN boundaries, and packets that are
-already visible to the adapter. A device that has never been observed cannot be
-confirmed from a silent network. LANtern can check only previously known IP addresses;
-if a remembered
-device moves to a different IP and emits no traffic, its new address may not be
-known until it communicates or a fresh DHCP/ARP observation is captured.
+Software cannot increase Wi-Fi radio range or scan through walls. Manual
+discovery sends ARP requests only within the selected adapter's local IPv4
+segment (bounded to the local /24 on larger networks). Access-point client
+isolation, VLAN boundaries, a different broadcast network, driver limitations,
+or devices that do not answer ARP can still prevent detection. A device that
+moves to another address after the scan may not appear until another manual
+scan or a new DHCP/ARP observation occurs.
 
 To avoid affecting every discovered device, packet interception is now scoped
 to devices with an explicit pause, non-zero rate limit, or domain-blocking rule.
