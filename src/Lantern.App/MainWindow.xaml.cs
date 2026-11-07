@@ -62,6 +62,7 @@ public partial class MainWindow : Window
         engine.StateChanged += Engine_OnStateChanged;
         engine.DeviceIdentityLearned += Engine_OnDeviceIdentityLearned;
         engine.DeviceDomainObserved += Engine_OnDeviceDomainObserved;
+        engine.IdentityAlertDetected += Engine_OnIdentityAlertDetected;
         refreshTimer = new DispatcherTimer(
             TrafficSamplingProfile.Interval,
             DispatcherPriority.Background,
@@ -226,7 +227,7 @@ public partial class MainWindow : Window
 
     private async void ScanButton_OnClick(object sender, RoutedEventArgs eventArgs)
     {
-        if (operationInProgress || !engine.IsRunning)
+        if (operationInProgress || AdapterSelector.SelectedItem is not AdapterProfile adapter)
         {
             return;
         }
@@ -235,13 +236,13 @@ public partial class MainWindow : Window
         UpdateButtons();
         try
         {
-            SetStatus("Sending a full /24 ARP sweep…", null);
             UpdateKnownDeviceHints();
-            var result = await engine.RefreshNeighborsAsync();
+            SetStatus("Reading the neighbor cache and saved device history…", null);
+            var result = await engine.ScanDevicesAsync(adapter);
             RefreshDevices(null, EventArgs.Empty);
             await SaveSettingsIfDirtyAsync();
-            SetStatus("Control active", true);
             DetailStatusText.Text = result.StatusMessage;
+            SetStatus(result.StatusMessage, true);
         }
         catch (Exception exception)
         {
@@ -719,9 +720,7 @@ public partial class MainWindow : Window
     private void AdapterSelector_OnSelectionChanged(object sender, SelectionChangedEventArgs eventArgs)
     {
         UpdateAdapterSummary();
-        StartButton.IsEnabled = !operationInProgress &&
-                                !engine.IsRunning &&
-                                AdapterSelector.SelectedItem is AdapterProfile;
+        UpdateButtons();
     }
 
     private async Task StopEngineAsync()
@@ -791,6 +790,13 @@ public partial class MainWindow : Window
                 if (!string.Equals(preferences.LastKnownIp, currentIp, StringComparison.Ordinal))
                 {
                     preferences.LastKnownIp = currentIp;
+                    settingsDirty = true;
+                }
+
+                if (snapshot.LastSeen != DateTimeOffset.MinValue &&
+                    (preferences.LastSeenUtc is null || snapshot.LastSeen > preferences.LastSeenUtc))
+                {
+                    preferences.LastSeenUtc = snapshot.LastSeen;
                     settingsDirty = true;
                 }
             }
@@ -937,6 +943,15 @@ public partial class MainWindow : Window
         _ = Dispatcher.InvokeAsync(() => DetailStatusText.Text = message);
     }
 
+    private void Engine_OnIdentityAlertDetected(object? sender, string warning)
+    {
+        _ = Dispatcher.InvokeAsync(() =>
+        {
+            DetailStatusText.Text = warning;
+            SetStatus(warning, false);
+        });
+    }
+
     private void Engine_OnStateChanged(
         object? sender,
         PcapEngineStateChangedEventArgs eventArgs)
@@ -1051,10 +1066,13 @@ public partial class MainWindow : Window
                                 !engine.IsRunning &&
                                 AdapterSelector.SelectedItem is AdapterProfile;
         StopButton.IsEnabled = !operationInProgress && engine.IsRunning;
-        ScanButton.IsEnabled = !operationInProgress && engine.IsRunning;
+        ScanButton.IsEnabled = !operationInProgress &&
+                               AdapterSelector.SelectedItem is AdapterProfile;
         AdapterSelector.IsEnabled = !operationInProgress && !engine.IsRunning;
         StartButton.Visibility = engine.IsRunning ? Visibility.Collapsed : Visibility.Visible;
-        ScanButton.Visibility = engine.IsRunning ? Visibility.Visible : Visibility.Collapsed;
+        ScanButton.Visibility = AdapterSelector.SelectedItem is AdapterProfile
+            ? Visibility.Visible
+            : Visibility.Collapsed;
         StopButton.Visibility = engine.IsRunning ? Visibility.Visible : Visibility.Collapsed;
     }
 
