@@ -277,8 +277,27 @@ public partial class MainWindow : Window
         UpdateButtons();
         try
         {
+            var selectedAdapter = AdapterSelector.SelectedItem as AdapterProfile;
+            var osEntriesRemoved = 0;
+            var osEntriesNotRemoved = 0;
             foreach (var device in offlineDevices)
             {
+                if (selectedAdapter is not null &&
+                    IPAddress.TryParse(device.IpAddress, out var address))
+                {
+                    if (await WindowsNeighborCache.DeleteAsync(
+                            selectedAdapter,
+                            address,
+                            CancellationToken.None))
+                    {
+                        osEntriesRemoved++;
+                    }
+                    else
+                    {
+                        osEntriesNotRemoved++;
+                    }
+                }
+
                 var macAddress = PhysicalAddress.Parse(device.MacKey);
                 engine.ForgetDevice(macAddress);
                 registry.Remove(macAddress);
@@ -296,9 +315,15 @@ public partial class MainWindow : Window
             settingsDirty = true;
             await SaveSettingsIfDirtyAsync();
             RefreshDevices(null, EventArgs.Empty);
+            var cacheNote = osEntriesNotRemoved == 0
+                ? $"Removed {osEntriesRemoved} matching Windows neighbor-cache entr" +
+                  $"{(osEntriesRemoved == 1 ? "y" : "ies")}."
+                : $"{osEntriesRemoved} Windows neighbor-cache entries were removed; " +
+                  $"{osEntriesNotRemoved} were already absent or could not be removed.";
             SetStatus(
                 $"Cleared {offlineDevices.Length} offline device cache entr" +
-                $"{(offlineDevices.Length == 1 ? "y" : "ies")}. Saved names and rules were preserved.",
+                $"{(offlineDevices.Length == 1 ? "y" : "ies")}. {cacheNote} " +
+                "Saved names and rules were preserved.",
                 true);
         }
         catch (Exception exception) when (
