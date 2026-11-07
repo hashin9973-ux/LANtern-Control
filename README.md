@@ -174,18 +174,29 @@ change the router configuration.
 ## Device discovery and identity conflicts
 
 **Scan devices** reads the selected adapter's OS neighbor cache and merges
-saved device identities. It also runs an independent local reachability sweep:
-two ICMP echo attempts, bounded TCP connection checks against common local
-services, and NetBIOS/mDNS queries for hosts that did not answer the earlier
-checks. Only explicit positive responses count as live hosts; a TCP timeout is
-not treated as a response. The existing packet-capture path performs its
-separate ARP discovery pass, with one request per candidate at 200 ms intervals
-and one 150 ms retry for addresses that did not reply. Controller and gateway
-addresses are excluded. Candidate discovery is limited to the selected local
-IPv4 segment (capped to a /24 on larger networks) and at most 253 addresses.
-The ARP pass is limited to once per minute per adapter; the ICMP/TCP/name
-probes run only when the user requests a scan. Status reports positive
-responses by protocol and the validated ARP reply count.
+saved device identities. The ARP/cache pass runs first, with one
+request per candidate at 200 ms intervals and one 150 ms retry for addresses
+that did not reply. Controller and gateway addresses are excluded. Candidate
+discovery is limited to the selected local IPv4 segment (capped to a /24 on
+larger networks) and at most 253 addresses.
+
+Only addresses without recent reachability evidence receive supplemental
+protocol checks. For each such address, LANtern tries one ICMP echo, then at
+most two TCP connection attempts (ports 443 and 80), followed by at most one
+NetBIOS node-status query and one mDNS reverse-lookup query. It stops probing
+that address after the first positive response. Supplemental probe starts are
+globally spaced by at least 50 ms, with at most eight hosts checked
+concurrently and no more than five supplemental probes per unconfirmed
+address. The supplemental pass has a separate one-minute cooldown per
+adapter. Both passes run only after the user presses **Scan devices**; no
+whole-subnet discovery pass is added to background monitoring. Background
+presence checks remain limited to remembered device addresses.
+
+Only explicit positive protocol responses count as live hosts; a TCP timeout
+or cached neighbor entry is not treated as proof of current reachability.
+Positive IP-only responses remain visible as inventory-only entries when no
+fresh verified MAC mapping is available. Status reports positive responses
+by protocol and the validated ARP reply count.
 
 A live IP response is retained in the device list even when LANtern cannot
 obtain a verified MAC address. Such a row is labelled **inventory only** and
@@ -213,10 +224,13 @@ identified reliably by a passive listener alone. Router/AP association tables,
 DHCP lease history, or managed-switch telemetry provide stronger evidence.
 
 Software cannot increase Wi-Fi radio range or scan through walls. Manual
-discovery sends ARP requests only within the selected adapter's local IPv4
-segment (bounded to the local /24 on larger networks). Access-point client
+discovery is limited to the selected adapter's local IPv4 segment (bounded to
+the local /24 on larger networks). A device can be found without answering ARP
+when it responds to one of the supplemental protocols, but access-point client
 isolation, VLAN boundaries, a different broadcast network, driver limitations,
-or devices that do not answer ARP can still prevent detection. A device that
+or a device that is silent on all checked protocols can still prevent
+detection. Powered-off or completely silent devices require router/AP client
+inventory or DHCP lease history to be listed as unavailable. A device that
 moves to another address after the scan may not appear until another manual
 scan or a new DHCP/ARP observation occurs.
 

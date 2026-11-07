@@ -99,8 +99,8 @@ jobs:
           body: |
             Windows x64 portable build.
 
-            Includes bounded manual local IPv4 discovery, validated ARP response counts, one paced retry for hosts that miss the first request, and retained offline identity history.
-            Manual scans check at most the controller's local /24, with 200 ms primary spacing and 150 ms retry spacing, no more than once per minute. Automatic presence checks remain limited to known devices; there is no continuous subnet sweep.
+            Includes paced ARP discovery followed by supplemental ICMP, TCP, NetBIOS, and mDNS checks only for addresses without recent reachability evidence. Positive IPs without a fresh verified MAC remain visible as inventory-only entries; discovery does not expand interception eligibility.
+            Manual discovery is limited to the selected local /24. ARP uses 200 ms primary spacing and 150 ms retry spacing. Supplemental probes are globally spaced by at least 50 ms, capped at 8 concurrent hosts and 5 probes per unconfirmed address, with a separate one-minute per-adapter cooldown. No supplemental subnet sweep runs in the background; automatic presence checks remain limited to known devices.
           generate_release_notes: true
           files: .\outputs\LANtern-Control-v0.1.8-win-x64.zip
           fail_on_unmatched_files: true
