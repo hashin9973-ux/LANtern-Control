@@ -6,6 +6,10 @@ public sealed class AppSettings
 
     public DateTimeOffset? LastUpdateCheckUtc { get; set; }
 
+    public bool AutoScanEnabled { get; set; }
+
+    public int AutoScanIntervalSeconds { get; set; } = 60;
+
     public Dictionary<string, DevicePreferences> Devices { get; init; } =
         new(StringComparer.OrdinalIgnoreCase);
 
