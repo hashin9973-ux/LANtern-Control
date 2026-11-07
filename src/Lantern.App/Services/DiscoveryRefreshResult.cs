@@ -1,11 +1,10 @@
 namespace Lantern.App.Services;
 
 public sealed record DiscoveryRefreshResult(
-    int ProbesSent,
-    int RepliesReceived,
+    int CachedEntriesLoaded,
     int KnownDeviceCount)
 {
     public string StatusMessage =>
-        $"ARP sweep complete — {ProbesSent} probes, {RepliesReceived} " +
-        $"{(RepliesReceived == 1 ? "reply" : "replies")}, {KnownDeviceCount} known devices.";
+        $"Device inventory refreshed — {CachedEntriesLoaded} cached entries, " +
+        $"{KnownDeviceCount} known devices. No scan probes were sent.";
 }
