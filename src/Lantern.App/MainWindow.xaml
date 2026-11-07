@@ -403,7 +403,8 @@
                     <Button x:Name="OverviewNavButton"
                             Style="{StaticResource NavButtonStyle}"
                             Tag="OverviewSection"
-                            Click="NavigationButton_OnClick">
+                            Click="NavigationButton_OnClick"
+                            AutomationProperties.AutomationId="nav_overview">
                         <StackPanel Orientation="Horizontal">
                             <Grid Width="25" Height="20">
                                 <Path Width="16"
@@ -537,6 +538,7 @@
         </Border>
 
         <ScrollViewer x:Name="MainScrollViewer"
+                      AutomationProperties.AutomationId="main_scroll_viewer"
                       Grid.Row="1"
                       Grid.Column="1"
                       HorizontalScrollBarVisibility="Disabled"
