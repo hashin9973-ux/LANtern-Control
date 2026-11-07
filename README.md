@@ -35,8 +35,8 @@ use case.
 - Keep a ten-minute network activity chart with 2.5-second samples.
 - Apply independent download and upload limits in `KB/s`.
 - Pause and restore a device's IPv4 internet connection.
-- Copy stable, MAC-based UI Automation IDs for each device directly from its row.
-- Edit, save, and run PowerShell scripts in the Windows app, with an optional configurable schedule.
+- Copy a complete, device-specific PowerShell UI Automation script directly from each device row.
+- Edit, save, and run PowerShell scripts in the Windows app from the dedicated **Script automation** page, with an optional configurable schedule.
 - Observe domains through DNS queries, TLS server names, and plain HTTP host
   headers without decrypting private HTTPS content.
 - Block domains for individual devices, including presets for common services.
@@ -151,7 +151,7 @@ disconnecting the selected adapter, suspending, or rebooting.
 4. Click **Start control** to enable the selected device rules and live capture.
 5. Enter a download or upload limit in `KB/s`. A value of `0` means unlimited.
 6. Use the **Internet** switch to pause or restore a device's connection.
-7. In **Script automation**, choose a `.ps1` file, use **Run now** to test it, or explicitly enable a 60–3600 second schedule. The schedule stops when LANtern closes and skips overlapping runs.
+7. Open **Script automation** from the left sidebar. Use **Open…** to load a `.ps1` file, **Run now** to test it, or explicitly enable a 60–3600 second schedule. The schedule stops when LANtern closes and skips overlapping runs.
 8. Open **Visited domains** to inspect the destination domains LANtern can
    observe for each device.
 9. Add individual domain rules or use a service preset to block domains for a
@@ -256,7 +256,7 @@ non-intrusive whole-network traffic monitoring.
 
 ## Script automation and UI Automation
 
-The Windows app includes a built-in PowerShell text editor. Use **Open…** to
+The Windows app includes a dedicated **Script automation** page in the left sidebar. Open it directly rather than scrolling through the device list. It contains a built-in PowerShell text editor. Use **Open…** to
 load an existing `.ps1` file, edit it in the app, and use **Save** or
 **Save As…**. When no file has been selected, **Save** creates
 `%LOCALAPPDATA%\LANternControl\Scripts\lantern-automation.ps1`. **Run now**
@@ -274,13 +274,18 @@ Only run scripts you have inspected and understand. LANtern does not bypass
 the Windows PowerShell execution policy. Scheduled runs execute the last
 saved file; unsaved editor changes are not picked up until saved.
 
-Each device row has a **Copy IDs** button beside its name. It copies the row,
-name editor, download limit, upload limit, and pause-switch Automation IDs as
-plain text. IDs are derived from the device's MAC address, not its sorted row
-number or display name, so they remain stable when the list is reordered.
-Inventory-only devices without a verified MAC use an IP-based identity and
-cannot be controlled. Scripts are separate PowerShell processes: copying an
-ID does not itself connect a script to LANtern's internal device collection.
+Each controllable device row has a **Copy script** button beside its name. It
+copies a complete PowerShell UI Automation starter script containing that
+device's row, name, download-limit, upload-limit, and pause-switch identifiers,
+plus helper functions for `ValuePattern` text edits and `TogglePattern` pause /
+resume changes. The example actions are commented out so the copied template
+does not change a device until you edit and enable the commands. The device
+identifiers are derived from its MAC address rather than its sorted row number
+or display name, so they remain stable when the list is reordered. Inventory-only
+devices without a verified MAC cannot be controlled. Scripts are separate
+PowerShell processes and use Windows UI Automation to interact with controls
+exposed by LANtern; the device row must be visible in the device list when the
+script starts.
 
 ## Domain visibility and blocking
 
