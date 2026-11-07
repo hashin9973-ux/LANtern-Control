@@ -226,7 +226,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             string? probeWarning = null;
             try
             {
-                probesSent = await ProbeKnownAddressesAsync(
+                probesSent = await ProbeAddressesAsync(
                     selectedAdapter,
                     force: true,
                     cancellationToken,
@@ -317,7 +317,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
         return imported;
     }
-    private async Task<int> ProbeKnownAddressesAsync(
+    private async Task<int> ProbeAddressesAsync(
         AdapterProfile activeProfile,
         bool force,
         CancellationToken cancellationToken,
@@ -902,7 +902,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             await refreshSync.WaitAsync(cancellationToken);
             try
             {
-                await ProbeKnownAddressesAsync(
+                await ProbeAddressesAsync(
                     activeProfile,
                     force: false,
                     cancellationToken);
