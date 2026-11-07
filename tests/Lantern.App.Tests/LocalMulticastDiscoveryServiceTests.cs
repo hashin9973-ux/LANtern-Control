@@ -83,7 +83,7 @@ public sealed class LocalMulticastDiscoveryServiceTests
         const ushort transactionId = 0x4321;
         var wrongIdResponse = BuildDnsSdResponse(transactionId);
         var wrongQuestionResponse = BuildDnsSdResponse(transactionId);
-        wrongQuestionResponse[^1] ^= 0x01;
+        wrongQuestionResponse[13] ^= 0x01;
 
         Assert.False(
             LocalMulticastDiscoveryService.IsMdnsServiceBrowseResponse(
