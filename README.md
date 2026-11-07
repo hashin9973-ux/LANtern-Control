@@ -263,7 +263,10 @@ The Windows app can run one user-selected PowerShell `.ps1` file manually or
 on a 60–3600 second schedule. Scheduled execution is disabled by default,
 requires explicit confirmation, runs only while LANtern is open, and stops
 when the app closes. A running script is limited to two minutes; a new run is
-skipped while a previous run is still active.
+skipped while a previous run is still active. The selected script
+path, enabled state, and interval are saved in LANtern's local settings file.
+Closing LANtern stops the schedule; it does not register a Windows Task
+Scheduler job.
 
 Scripts run as the same Windows account and with the same permissions as
 LANtern. When LANtern is elevated, child scripts inherit that elevated token.
