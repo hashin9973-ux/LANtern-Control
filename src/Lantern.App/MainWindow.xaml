@@ -1739,6 +1739,7 @@
                                                                     Tag="{Binding}"
                                                                     AutomationProperties.AutomationId="{Binding CopyAutomationScriptButtonAutomationId}"
                                                                     AutomationProperties.Name="Copy device PowerShell automation script"
+                                                                    IsEnabled="{Binding CanControl}"
                                                                     Click="CopyAutomationScriptButton_OnClick"
                                                                     Content="Copy script"
                                                                     ToolTip="Copy a complete PowerShell UI Automation starter script for this device" />
