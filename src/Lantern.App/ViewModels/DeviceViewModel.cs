@@ -66,6 +66,8 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
 
     public string PauseAutomationId => $"pause_{AutomationIdSuffix}";
 
+    public string CopyAutomationIdsButtonAutomationId => $"copy_ids_{AutomationIdSuffix}";
+
     public bool HasMacAddress
     {
         get => hasMacAddress;
@@ -295,6 +297,7 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(DownloadLimitAutomationId));
         OnPropertyChanged(nameof(UploadLimitAutomationId));
         OnPropertyChanged(nameof(PauseAutomationId));
+        OnPropertyChanged(nameof(CopyAutomationIdsButtonAutomationId));
     }
 
     private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
