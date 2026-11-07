@@ -24,6 +24,8 @@ namespace Lantern.App;
 public partial class MainWindow : Window
 {
     private const int MaxWebsiteActivityRows = 250;
+    private const int MinimumAutoScanIntervalSeconds = 60;
+    private const int MaximumAutoScanIntervalSeconds = 3600;
     private static readonly HttpClient UpdateHttpClient = new()
     {
         Timeout = TimeSpan.FromSeconds(5),
@@ -33,6 +35,7 @@ public partial class MainWindow : Window
     private readonly SettingsStore settingsStore = new();
     private readonly SemaphoreSlim identitySaveSync = new(1, 1);
     private readonly DispatcherTimer refreshTimer;
+    private readonly DispatcherTimer autoScanTimer;
     private readonly Dictionary<string, DeviceViewModel> deviceIndex =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DeviceActivityViewModel> websiteActivityIndex =
@@ -69,6 +72,11 @@ public partial class MainWindow : Window
             DispatcherPriority.Background,
             RefreshDevices,
             Dispatcher);
+        autoScanTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(MinimumAutoScanIntervalSeconds),
+        };
+        autoScanTimer.Tick += AutoScanTimer_OnTick;
         Loaded += MainWindow_OnLoaded;
         Closing += MainWindow_OnClosing;
 
@@ -116,6 +124,14 @@ public partial class MainWindow : Window
     private async void MainWindow_OnLoaded(object sender, RoutedEventArgs eventArgs)
     {
         settings = await settingsStore.LoadAsync();
+        if (settings.AutoScanIntervalSeconds is < MinimumAutoScanIntervalSeconds or > MaximumAutoScanIntervalSeconds)
+        {
+            settings.AutoScanIntervalSeconds = MinimumAutoScanIntervalSeconds;
+        }
+
+        AutoScanIntervalTextBox.Text = settings.AutoScanIntervalSeconds.ToString();
+        AutoScanCheckBox.IsChecked = settings.AutoScanEnabled;
+        ConfigureAutoScanTimer();
         LoadDomainRulesFromSettings();
         var adapters = WindowsAdapterService.GetUsableAdapters();
         AdapterSelector.ItemsSource = adapters;
@@ -127,6 +143,7 @@ public partial class MainWindow : Window
             StartButton.IsEnabled = false;
         }
 
+        UpdateButtons();
         await CheckForUpdatesAsync();
     }
 
@@ -228,7 +245,128 @@ public partial class MainWindow : Window
 
     private async void ScanButton_OnClick(object sender, RoutedEventArgs eventArgs)
     {
-        if (operationInProgress || AdapterSelector.SelectedItem is not AdapterProfile adapter)
+        if (AdapterSelector.SelectedItem is AdapterProfile adapter)
+        {
+            await RunDeviceScanAsync(adapter, isAutomatic: false);
+        }
+    }
+
+    private async void AutoScanCheckBox_OnClick(object sender, RoutedEventArgs eventArgs)
+    {
+        var enabled = AutoScanCheckBox.IsChecked == true;
+        if (enabled && !TryGetAutoScanInterval(out var intervalSeconds))
+        {
+            AutoScanCheckBox.IsChecked = false;
+            SetStatus(
+                $"Automatic scan interval must be between {MinimumAutoScanIntervalSeconds} and " +
+                $"{MaximumAutoScanIntervalSeconds} seconds.",
+                false);
+            return;
+        }
+
+        var previousEnabled = settings.AutoScanEnabled;
+        var previousInterval = settings.AutoScanIntervalSeconds;
+        settings.AutoScanEnabled = enabled;
+        if (enabled)
+        {
+            settings.AutoScanIntervalSeconds = intervalSeconds;
+        }
+
+        try
+        {
+            await settingsStore.SaveAsync(settings);
+            settingsDirty = false;
+            ConfigureAutoScanTimer();
+            SetStatus(
+                enabled
+                    ? $"Automatic device discovery enabled: a full scan runs every {settings.AutoScanIntervalSeconds} seconds."
+                    : "Automatic device discovery disabled.",
+                engine.IsRunning);
+        }
+        catch (IOException exception)
+        {
+            settings.AutoScanEnabled = previousEnabled;
+            settings.AutoScanIntervalSeconds = previousInterval;
+            AutoScanCheckBox.IsChecked = previousEnabled;
+            AutoScanIntervalTextBox.Text = previousInterval.ToString();
+            ConfigureAutoScanTimer();
+            SetStatus(exception.Message, false);
+        }
+    }
+
+    private async void AutoScanIntervalTextBox_OnLostFocus(object sender, RoutedEventArgs eventArgs)
+    {
+        if (!TryGetAutoScanInterval(out var intervalSeconds))
+        {
+            AutoScanIntervalTextBox.Text = settings.AutoScanIntervalSeconds.ToString();
+            SetStatus(
+                $"Automatic scan interval must be between {MinimumAutoScanIntervalSeconds} and " +
+                $"{MaximumAutoScanIntervalSeconds} seconds.",
+                false);
+            return;
+        }
+
+        if (settings.AutoScanIntervalSeconds == intervalSeconds)
+        {
+            return;
+        }
+
+        var previousInterval = settings.AutoScanIntervalSeconds;
+        settings.AutoScanIntervalSeconds = intervalSeconds;
+        settingsDirty = true;
+        try
+        {
+            await SaveSettingsIfDirtyAsync();
+            ConfigureAutoScanTimer();
+            if (settings.AutoScanEnabled)
+            {
+                DetailStatusText.Text =
+                    $"Automatic device discovery will run every {settings.AutoScanIntervalSeconds} seconds.";
+            }
+        }
+        catch (IOException exception)
+        {
+            settings.AutoScanIntervalSeconds = previousInterval;
+            AutoScanIntervalTextBox.Text = previousInterval.ToString();
+            SetStatus(exception.Message, false);
+        }
+    }
+
+    private bool TryGetAutoScanInterval(out int intervalSeconds) =>
+        int.TryParse(AutoScanIntervalTextBox.Text.Trim(), out intervalSeconds) &&
+        intervalSeconds is >= MinimumAutoScanIntervalSeconds and <= MaximumAutoScanIntervalSeconds;
+
+    private void ConfigureAutoScanTimer()
+    {
+        autoScanTimer.Stop();
+        if (!settings.AutoScanEnabled)
+        {
+            return;
+        }
+
+        autoScanTimer.Interval = TimeSpan.FromSeconds(
+            Math.Clamp(
+                settings.AutoScanIntervalSeconds,
+                MinimumAutoScanIntervalSeconds,
+                MaximumAutoScanIntervalSeconds));
+        autoScanTimer.Start();
+    }
+
+    private async void AutoScanTimer_OnTick(object? sender, EventArgs eventArgs)
+    {
+        if (!settings.AutoScanEnabled ||
+            operationInProgress ||
+            AdapterSelector.SelectedItem is not AdapterProfile adapter)
+        {
+            return;
+        }
+
+        await RunDeviceScanAsync(adapter, isAutomatic: true);
+    }
+
+    private async Task RunDeviceScanAsync(AdapterProfile adapter, bool isAutomatic)
+    {
+        if (operationInProgress)
         {
             return;
         }
@@ -240,7 +378,9 @@ public partial class MainWindow : Window
             UpdateKnownDeviceHints();
             var scanStartedAt = DateTimeOffset.UtcNow;
             SetStatus(
-                "Refreshing the neighbor cache and performing paced ARP discovery first…",
+                isAutomatic
+                    ? $"Automatic device discovery running (every {settings.AutoScanIntervalSeconds} seconds)…"
+                    : "Refreshing the neighbor cache and performing fast, paced ARP discovery first…",
                 null);
 
             DiscoveryRefreshResult arpResult;
@@ -248,7 +388,7 @@ public partial class MainWindow : Window
             try
             {
                 // ARP gets first chance to identify hosts. Supplemental protocol
-                // probes run only after this paced pass has completed.
+                // probes run only after this bounded, faster pass has completed.
                 arpResult = await engine.ScanDevicesAsync(adapter);
             }
             catch (Exception exception)
@@ -269,7 +409,7 @@ public partial class MainWindow : Window
                 .ToHashSet();
 
             SetStatus(
-                "Checking only addresses without recent reachability evidence using paced protocol fallbacks…",
+                "Checking only addresses without recent reachability evidence using faster paced protocol fallbacks…",
                 null);
 
             LocalHostDiscoveryResult hostResult;
@@ -337,6 +477,11 @@ public partial class MainWindow : Window
             if (!string.IsNullOrWhiteSpace(arpFailure))
             {
                 status += $" ARP discovery warning: {arpFailure}";
+            }
+
+            if (isAutomatic)
+            {
+                status = $"Automatic scan completed ({settings.AutoScanIntervalSeconds}-second interval). {status}";
             }
 
             DetailStatusText.Text = status;
@@ -1236,6 +1381,7 @@ public partial class MainWindow : Window
 
     private async void MainWindow_OnClosing(object? sender, CancelEventArgs eventArgs)
     {
+        autoScanTimer.Stop();
         if (closeAfterStop || !engine.IsRunning)
         {
             return;
@@ -1261,8 +1407,10 @@ public partial class MainWindow : Window
                                 !engine.IsRunning &&
                                 AdapterSelector.SelectedItem is AdapterProfile;
         StopButton.IsEnabled = !operationInProgress && engine.IsRunning;
-        ScanButton.IsEnabled = !operationInProgress &&
-                               AdapterSelector.SelectedItem is AdapterProfile;
+        var hasAdapter = AdapterSelector.SelectedItem is AdapterProfile;
+        ScanButton.IsEnabled = !operationInProgress && hasAdapter;
+        AutoScanCheckBox.IsEnabled = !operationInProgress && hasAdapter;
+        AutoScanIntervalTextBox.IsEnabled = !operationInProgress && hasAdapter;
         ClearDeviceCacheButton.IsEnabled = !operationInProgress;
         AdapterSelector.IsEnabled = !operationInProgress && !engine.IsRunning;
         StartButton.Visibility = engine.IsRunning ? Visibility.Collapsed : Visibility.Visible;
