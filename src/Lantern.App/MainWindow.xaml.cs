@@ -5,7 +5,9 @@ using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.NetworkInformation;
+using Microsoft.Win32;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
@@ -26,6 +28,8 @@ public partial class MainWindow : Window
     private const int MaxWebsiteActivityRows = 250;
     private const int MinimumAutoScanIntervalSeconds = 60;
     private const int MaximumAutoScanIntervalSeconds = 3600;
+    private const int MinimumScriptIntervalSeconds = 60;
+    private const int MaximumScriptIntervalSeconds = 3600;
     private static readonly HttpClient UpdateHttpClient = new()
     {
         Timeout = TimeSpan.FromSeconds(5),
@@ -36,6 +40,11 @@ public partial class MainWindow : Window
     private readonly SemaphoreSlim identitySaveSync = new(1, 1);
     private readonly DispatcherTimer refreshTimer;
     private readonly DispatcherTimer autoScanTimer;
+    private readonly DispatcherTimer scriptAutomationTimer;
+    private readonly PowerShellScriptRunner scriptRunner = new();
+    private readonly CancellationTokenSource scriptRunCancellation = new();
+    private Task? activeScriptRunTask;
+    private bool scriptRunInProgress;
     private readonly Dictionary<string, DeviceViewModel> deviceIndex =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DeviceActivityViewModel> websiteActivityIndex =
@@ -77,6 +86,11 @@ public partial class MainWindow : Window
             Interval = TimeSpan.FromSeconds(MinimumAutoScanIntervalSeconds),
         };
         autoScanTimer.Tick += AutoScanTimer_OnTick;
+        scriptAutomationTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(MinimumScriptIntervalSeconds),
+        };
+        scriptAutomationTimer.Tick += ScriptAutomationTimer_OnTick;
         Loaded += MainWindow_OnLoaded;
         Closing += MainWindow_OnClosing;
 
@@ -132,6 +146,11 @@ public partial class MainWindow : Window
         AutoScanIntervalTextBox.Text = settings.AutoScanIntervalSeconds.ToString();
         AutoScanCheckBox.IsChecked = settings.AutoScanEnabled;
         ConfigureAutoScanTimer();
+        ScriptPathTextBox.Text = settings.ScriptAutomationPath ?? string.Empty;
+        ScriptAutomationIntervalTextBox.Text = settings.ScriptAutomationIntervalSeconds.ToString();
+        ScriptAutomationCheckBox.IsChecked = settings.ScriptAutomationEnabled;
+        ConfigureScriptAutomationTimer();
+        UpdateScriptAutomationControls();
         LoadDomainRulesFromSettings();
         var adapters = WindowsAdapterService.GetUsableAdapters();
         AdapterSelector.ItemsSource = adapters;
@@ -363,6 +382,298 @@ public partial class MainWindow : Window
         }
 
         await RunDeviceScanAsync(adapter, isAutomatic: true);
+    }
+
+
+    private async void BrowseScriptButton_OnClick(object sender, RoutedEventArgs eventArgs)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "Choose a PowerShell script",
+            Filter = "PowerShell scripts (*.ps1)|*.ps1",
+            CheckFileExists = true,
+            CheckPathExists = true,
+            Multiselect = false,
+        };
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        settings.ScriptAutomationPath = Path.GetFullPath(dialog.FileName);
+        settings.ScriptAutomationEnabled = false;
+        ScriptPathTextBox.Text = settings.ScriptAutomationPath;
+        ScriptAutomationCheckBox.IsChecked = false;
+        ConfigureScriptAutomationTimer();
+        try
+        {
+            await settingsStore.SaveAsync(settings);
+            settingsDirty = false;
+            UpdateScriptAutomationControls();
+            ScriptAutomationStatusText.Text =
+                "Script selected. Review the file, then enable its schedule explicitly.";
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            ScriptAutomationStatusText.Text = $"Could not save script selection: {exception.Message}";
+            SetStatus(exception.Message, false);
+        }
+    }
+
+    private async void ScriptAutomationCheckBox_OnClick(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        var enabled = ScriptAutomationCheckBox.IsChecked == true;
+        if (enabled &&
+            (!TryGetScriptAutomationInterval(out var intervalSeconds) ||
+             string.IsNullOrWhiteSpace(settings.ScriptAutomationPath) ||
+             !File.Exists(settings.ScriptAutomationPath) ||
+             !string.Equals(
+                 Path.GetExtension(settings.ScriptAutomationPath),
+                 ".ps1",
+                 StringComparison.OrdinalIgnoreCase)))
+        {
+            ScriptAutomationCheckBox.IsChecked = false;
+            ScriptAutomationStatusText.Text =
+                "Choose an existing .ps1 file and set an interval from 60 to 3600 seconds first.";
+            return;
+        }
+
+        if (enabled)
+        {
+            var choice = MessageBox.Show(
+                this,
+                "The selected PowerShell script will run on this schedule while LANtern is open. " +
+                "It runs with the same Windows account and permissions as LANtern, including " +
+                "Administrator permissions when LANtern is elevated. Only enable a script you " +
+                "have inspected and trust. Windows PowerShell execution policy is not bypassed.\n\n" +
+                "Enable scheduled execution?",
+                "Confirm script automation",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+            if (choice != MessageBoxResult.Yes)
+            {
+                ScriptAutomationCheckBox.IsChecked = false;
+                return;
+            }
+        }
+
+        var previousEnabled = settings.ScriptAutomationEnabled;
+        var previousInterval = settings.ScriptAutomationIntervalSeconds;
+        settings.ScriptAutomationEnabled = enabled;
+        if (enabled && TryGetScriptAutomationInterval(out var selectedInterval))
+        {
+            settings.ScriptAutomationIntervalSeconds = selectedInterval;
+        }
+
+        try
+        {
+            await settingsStore.SaveAsync(settings);
+            settingsDirty = false;
+            ConfigureScriptAutomationTimer();
+            UpdateScriptAutomationControls();
+            ScriptAutomationStatusText.Text = enabled
+                ? $"Scheduled script enabled. It will next run in {settings.ScriptAutomationIntervalSeconds} seconds."
+                : "Scheduled script disabled.";
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            settings.ScriptAutomationEnabled = previousEnabled;
+            settings.ScriptAutomationIntervalSeconds = previousInterval;
+            ScriptAutomationCheckBox.IsChecked = previousEnabled;
+            ScriptAutomationIntervalTextBox.Text = previousInterval.ToString();
+            ConfigureScriptAutomationTimer();
+            UpdateScriptAutomationControls();
+            ScriptAutomationStatusText.Text = $"Could not save script schedule: {exception.Message}";
+        }
+    }
+
+    private async void ScriptAutomationIntervalTextBox_OnLostFocus(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        if (!TryGetScriptAutomationInterval(out var intervalSeconds))
+        {
+            ScriptAutomationIntervalTextBox.Text =
+                settings.ScriptAutomationIntervalSeconds.ToString();
+            ScriptAutomationStatusText.Text =
+                $"Script interval must be between {MinimumScriptIntervalSeconds} and " +
+                $"{MaximumScriptIntervalSeconds} seconds.";
+            return;
+        }
+
+        if (settings.ScriptAutomationIntervalSeconds == intervalSeconds)
+        {
+            return;
+        }
+
+        var previousInterval = settings.ScriptAutomationIntervalSeconds;
+        settings.ScriptAutomationIntervalSeconds = intervalSeconds;
+        try
+        {
+            await settingsStore.SaveAsync(settings);
+            settingsDirty = false;
+            ConfigureScriptAutomationTimer();
+            if (settings.ScriptAutomationEnabled)
+            {
+                ScriptAutomationStatusText.Text =
+                    $"Scheduled script interval changed to {intervalSeconds} seconds.";
+            }
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            settings.ScriptAutomationIntervalSeconds = previousInterval;
+            ScriptAutomationIntervalTextBox.Text = previousInterval.ToString();
+            ScriptAutomationStatusText.Text = $"Could not save script interval: {exception.Message}";
+        }
+    }
+
+    private bool TryGetScriptAutomationInterval(out int intervalSeconds) =>
+        int.TryParse(ScriptAutomationIntervalTextBox.Text.Trim(), out intervalSeconds) &&
+        intervalSeconds is >= MinimumScriptIntervalSeconds and <= MaximumScriptIntervalSeconds;
+
+    private void ConfigureScriptAutomationTimer()
+    {
+        scriptAutomationTimer.Stop();
+        if (!settings.ScriptAutomationEnabled ||
+            string.IsNullOrWhiteSpace(settings.ScriptAutomationPath) ||
+            !File.Exists(settings.ScriptAutomationPath))
+        {
+            return;
+        }
+
+        scriptAutomationTimer.Interval = TimeSpan.FromSeconds(
+            Math.Clamp(
+                settings.ScriptAutomationIntervalSeconds,
+                MinimumScriptIntervalSeconds,
+                MaximumScriptIntervalSeconds));
+        scriptAutomationTimer.Start();
+    }
+
+    private void UpdateScriptAutomationControls()
+    {
+        ScriptPathTextBox.Text = settings.ScriptAutomationPath ?? string.Empty;
+        ScriptAutomationCheckBox.IsChecked = settings.ScriptAutomationEnabled;
+        ScriptAutomationIntervalTextBox.Text =
+            settings.ScriptAutomationIntervalSeconds.ToString();
+        RunScriptNowButton.IsEnabled =
+            !scriptRunInProgress &&
+            !string.IsNullOrWhiteSpace(settings.ScriptAutomationPath) &&
+            File.Exists(settings.ScriptAutomationPath);
+        ScriptAutomationCheckBox.IsEnabled = !scriptRunInProgress;
+        ScriptAutomationIntervalTextBox.IsEnabled = !scriptRunInProgress;
+        BrowseScriptButton.IsEnabled = !scriptRunInProgress;
+    }
+
+    private async void RunScriptNowButton_OnClick(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        await StartSelectedScriptAsync(isScheduled: false);
+    }
+
+    private async void ScriptAutomationTimer_OnTick(
+        object? sender,
+        EventArgs eventArgs)
+    {
+        if (!settings.ScriptAutomationEnabled || scriptRunInProgress)
+        {
+            return;
+        }
+
+        await StartSelectedScriptAsync(isScheduled: true);
+    }
+
+    private Task StartSelectedScriptAsync(bool isScheduled)
+    {
+        if (scriptRunInProgress)
+        {
+            ScriptAutomationStatusText.Text =
+                "Skipped: the previous script run has not finished.";
+            return Task.CompletedTask;
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.ScriptAutomationPath) ||
+            !File.Exists(settings.ScriptAutomationPath))
+        {
+            ScriptAutomationStatusText.Text =
+                "The selected script is missing. Browse to a valid .ps1 file.";
+            return Task.CompletedTask;
+        }
+
+        scriptRunInProgress = true;
+        UpdateScriptAutomationControls();
+        activeScriptRunTask = RunSelectedScriptCoreAsync(
+            settings.ScriptAutomationPath,
+            isScheduled);
+        return activeScriptRunTask;
+    }
+
+    private async Task RunSelectedScriptCoreAsync(string scriptPath, bool isScheduled)
+    {
+        var startedAt = DateTimeOffset.Now;
+        ScriptAutomationStatusText.Text = isScheduled
+            ? $"Scheduled script running — started {startedAt:HH:mm:ss}."
+            : $"Script running — started {startedAt:HH:mm:ss}.";
+        try
+        {
+            var result = await scriptRunner.RunAsync(
+                scriptPath,
+                scriptRunCancellation.Token);
+            if (result.TimedOut)
+            {
+                ScriptAutomationStatusText.Text =
+                    $"Script timed out after {PowerShellScriptRunner.MaximumRunTime.TotalMinutes:0} minutes.";
+            }
+            else if (result.Succeeded)
+            {
+                ScriptAutomationStatusText.Text =
+                    $"Script completed successfully at {DateTimeOffset.Now:HH:mm:ss}.";
+            }
+            else
+            {
+                var detail = string.IsNullOrWhiteSpace(result.StandardError)
+                    ? result.StandardOutput
+                    : result.StandardError;
+                detail = detail.Trim();
+                if (detail.Length > 240)
+                {
+                    detail = detail[^240..];
+                }
+
+                ScriptAutomationStatusText.Text =
+                    string.IsNullOrWhiteSpace(detail)
+                        ? $"Script failed with exit code {result.ExitCode}."
+                        : $"Script failed with exit code {result.ExitCode}: {detail}";
+            }
+        }
+        catch (OperationCanceledException) when (scriptRunCancellation.IsCancellationRequested)
+        {
+            ScriptAutomationStatusText.Text = "Script execution cancelled because LANtern is closing.";
+        }
+        catch (Exception exception)
+        {
+            ScriptAutomationStatusText.Text = $"Script could not run: {exception.Message}";
+        }
+        finally
+        {
+            scriptRunInProgress = false;
+            activeScriptRunTask = null;
+            UpdateScriptAutomationControls();
+        }
+    }
+
+    private void DeviceGrid_OnLoadingRow(object? sender, DataGridRowEventArgs eventArgs)
+    {
+        if (eventArgs.Row.Item is DeviceViewModel device)
+        {
+            AutomationProperties.SetAutomationId(eventArgs.Row, device.RowAutomationId);
+            AutomationProperties.SetName(eventArgs.Row, device.DisplayName);
+        }
     }
 
     private async Task RunDeviceScanAsync(AdapterProfile adapter, bool isAutomatic)
@@ -1383,7 +1694,10 @@ public partial class MainWindow : Window
     private async void MainWindow_OnClosing(object? sender, CancelEventArgs eventArgs)
     {
         autoScanTimer.Stop();
-        if (closeAfterStop || !engine.IsRunning)
+        scriptAutomationTimer.Stop();
+        scriptRunCancellation.Cancel();
+        if (closeAfterStop ||
+            (!engine.IsRunning && activeScriptRunTask is null))
         {
             return;
         }
@@ -1392,8 +1706,16 @@ public partial class MainWindow : Window
         IsEnabled = false;
         try
         {
-            await StopEngineAsync();
-            await engine.DisposeAsync();
+            if (activeScriptRunTask is not null)
+            {
+                await activeScriptRunTask;
+            }
+
+            if (engine.IsRunning)
+            {
+                await StopEngineAsync();
+                await engine.DisposeAsync();
+            }
         }
         finally
         {
@@ -1412,6 +1734,7 @@ public partial class MainWindow : Window
         ScanButton.IsEnabled = !operationInProgress && hasAdapter;
         AutoScanCheckBox.IsEnabled = !operationInProgress && hasAdapter;
         AutoScanIntervalTextBox.IsEnabled = !operationInProgress && hasAdapter;
+        UpdateScriptAutomationControls();
         ClearDeviceCacheButton.IsEnabled = !operationInProgress;
         AdapterSelector.IsEnabled = !operationInProgress && !engine.IsRunning;
         StartButton.Visibility = engine.IsRunning ? Visibility.Collapsed : Visibility.Visible;
