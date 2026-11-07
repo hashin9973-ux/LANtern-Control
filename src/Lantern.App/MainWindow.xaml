@@ -1670,22 +1670,41 @@
                                                               Stretch="Uniform" />
                                                     </Border>
                                                     <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                                        <TextBox x:Name="DeviceNameEditor"
-                                                                 AutomationProperties.AutomationId="{Binding NameAutomationId}"
-                                                                 Height="18"
-                                                                 MinHeight="18"
-                                                                 Margin="0"
-                                                                 Padding="0"
-                                                                 Background="Transparent"
-                                                                 BorderThickness="0"
-                                                                 CaretBrush="{StaticResource Accent}"
-                                                                 FocusVisualStyle="{x:Null}"
-                                                                 FontWeight="SemiBold"
-                                                                 Foreground="{StaticResource PrimaryText}"
-                                                                 IsEnabled="{Binding CanControl}"
-                                                                 VerticalContentAlignment="Center"
-                                                                 Text="{Binding EditableName, UpdateSourceTrigger=PropertyChanged, Delay=350}"
-                                                                 ToolTip="Click to rename this device" />
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*" />
+                                                                <ColumnDefinition Width="Auto" />
+                                                            </Grid.ColumnDefinitions>
+                                                            <TextBox x:Name="DeviceNameEditor"
+                                                                     Grid.Column="0"
+                                                                     AutomationProperties.AutomationId="{Binding NameAutomationId}"
+                                                                     Height="18"
+                                                                     MinHeight="18"
+                                                                     Margin="0"
+                                                                     Padding="0"
+                                                                     Background="Transparent"
+                                                                     BorderThickness="0"
+                                                                     CaretBrush="{StaticResource Accent}"
+                                                                     FocusVisualStyle="{x:Null}"
+                                                                     FontWeight="SemiBold"
+                                                                     Foreground="{StaticResource PrimaryText}"
+                                                                     IsEnabled="{Binding CanControl}"
+                                                                     VerticalContentAlignment="Center"
+                                                                     Text="{Binding EditableName, UpdateSourceTrigger=PropertyChanged, Delay=350}"
+                                                                     ToolTip="Click to rename this device" />
+                                                            <Button x:Name="CopyAutomationIdsButton"
+                                                                    Grid.Column="1"
+                                                                    MinHeight="22"
+                                                                    Margin="8,0,0,0"
+                                                                    Padding="8,2"
+                                                                    FontSize="10"
+                                                                    Tag="{Binding}"
+                                                                    AutomationProperties.AutomationId="{Binding CopyAutomationIdsButtonAutomationId}"
+                                                                    AutomationProperties.Name="Copy device Automation IDs"
+                                                                    Click="CopyAutomationIdsButton_OnClick"
+                                                                    Content="Copy IDs"
+                                                                    ToolTip="Copy this device's row, name, download, upload, and pause Automation IDs" />
+                                                        </Grid>
                                                         <StackPanel x:Name="DeviceMetadata"
                                                                     Margin="0"
                                                                     Orientation="Horizontal">
@@ -1873,6 +1892,8 @@
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <TextBox x:Name="ScriptPathTextBox"
                                      Height="34"
@@ -1891,9 +1912,23 @@
                                     Margin="0,0,8,0"
                                     Padding="13,6"
                                     Click="BrowseScriptButton_OnClick"
-                                    Content="Browse…" />
-                            <Button x:Name="RunScriptNowButton"
+                                    Content="Open…" />
+                            <Button x:Name="SaveScriptButton"
                                     Grid.Column="2"
+                                    MinHeight="34"
+                                    Margin="0,0,8,0"
+                                    Padding="13,6"
+                                    Click="SaveScriptButton_OnClick"
+                                    Content="Save" />
+                            <Button x:Name="SaveScriptAsButton"
+                                    Grid.Column="3"
+                                    MinHeight="34"
+                                    Margin="0,0,8,0"
+                                    Padding="13,6"
+                                    Click="SaveScriptAsButton_OnClick"
+                                    Content="Save As…" />
+                            <Button x:Name="RunScriptNowButton"
+                                    Grid.Column="4"
                                     MinHeight="34"
                                     Margin="0,0,14,0"
                                     Padding="13,6"
@@ -1901,7 +1936,7 @@
                                     Content="Run now"
                                     IsEnabled="False" />
                             <CheckBox x:Name="ScriptAutomationCheckBox"
-                                      Grid.Column="3"
+                                      Grid.Column="5"
                                       Margin="0,0,8,0"
                                       VerticalAlignment="Center"
                                       Foreground="{StaticResource PrimaryText}"
@@ -1909,7 +1944,7 @@
                                       Click="ScriptAutomationCheckBox_OnClick"
                                       AutomationProperties.AutomationId="script_schedule_enabled" />
                             <TextBox x:Name="ScriptAutomationIntervalTextBox"
-                                     Grid.Column="4"
+                                     Grid.Column="6"
                                      Width="58"
                                      Height="32"
                                      Margin="0,0,5,0"
@@ -1925,18 +1960,42 @@
                                      ToolTip="Script interval in seconds (60–3600)"
                                      LostFocus="ScriptAutomationIntervalTextBox_OnLostFocus"
                                      AutomationProperties.AutomationId="script_schedule_interval" />
-                            <TextBlock Grid.Column="5"
+                            <TextBlock Grid.Column="7"
                                        VerticalAlignment="Center"
                                        Foreground="{StaticResource SecondaryText}"
                                        Text="sec" />
                         </Grid>
+                        <TextBlock Margin="0,16,0,0"
+                                   Text="PowerShell editor"
+                                   Foreground="{StaticResource SecondaryText}"
+                                   FontSize="10"
+                                   FontWeight="SemiBold" />
+                        <TextBox x:Name="ScriptEditorTextBox"
+                                 MinHeight="240"
+                                 Margin="0,8,0,0"
+                                 Padding="12"
+                                 AcceptsReturn="True"
+                                 AcceptsTab="True"
+                                 SpellCheck.IsEnabled="False"
+                                 TextWrapping="NoWrap"
+                                 VerticalScrollBarVisibility="Auto"
+                                 HorizontalScrollBarVisibility="Auto"
+                                 Background="{StaticResource InputBackground}"
+                                 Foreground="{StaticResource PrimaryText}"
+                                 CaretBrush="{StaticResource Accent}"
+                                 BorderBrush="{StaticResource Border}"
+                                 BorderThickness="1"
+                                 FontFamily="Consolas"
+                                 FontSize="12"
+                                 TextChanged="ScriptEditorTextBox_OnTextChanged"
+                                 AutomationProperties.AutomationId="script_editor" />
                         <TextBlock x:Name="ScriptAutomationStatusText"
                                    Margin="0,12,0,0"
                                    Text="No script selected. Scheduled execution is disabled."
                                    Foreground="{StaticResource SecondaryText}"
                                    TextWrapping="Wrap" />
                         <TextBlock Margin="0,6,0,0"
-                                   Text="Scripts run only while LANtern is open, with LANtern’s Windows permissions. Choose scripts you have inspected and trust."
+                                   Text="Open, edit, and save .ps1 files here. Run now saves the editor contents before execution. Scheduled runs use the last saved version and stop when LANtern closes. Scripts inherit LANtern’s Windows permissions; only run scripts you understand and trust."
                                    Foreground="{StaticResource SecondaryText}"
                                    FontSize="11"
                                    TextWrapping="Wrap" />
