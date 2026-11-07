@@ -161,6 +161,10 @@ public sealed class SettingsStore
         {
             DisableUpdateChecks = settings.DisableUpdateChecks,
             LastUpdateCheckUtc = settings.LastUpdateCheckUtc?.ToUniversalTime(),
+            AutoScanEnabled = settings.AutoScanEnabled,
+            AutoScanIntervalSeconds = settings.AutoScanIntervalSeconds is >= 60 and <= 3600
+                ? settings.AutoScanIntervalSeconds
+                : 60,
         };
         foreach (var pair in settings.Devices)
         {
