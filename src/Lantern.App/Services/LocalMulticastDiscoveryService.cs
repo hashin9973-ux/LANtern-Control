@@ -126,18 +126,12 @@ public sealed class LocalMulticastDiscoveryService
         }
 
         var flags = ReadUInt16(packet, 2);
+        var answerCount = ReadUInt16(packet, 6);
         if ((flags & 0x8000) == 0 || // QR must indicate a response.
             (flags & 0x7800) != 0 || // Only the standard query opcode is accepted.
             (flags & 0x000f) != 0 || // Reject DNS errors.
-            ReadUInt16(packet, 4) != 1)
-        {
-            return false;
-        }
-
-        var recordCount = ReadUInt16(packet, 6) +
-                          ReadUInt16(packet, 8) +
-                          ReadUInt16(packet, 10);
-        if (recordCount == 0)
+            ReadUInt16(packet, 4) != 1 ||
+            answerCount == 0)
         {
             return false;
         }
@@ -155,7 +149,41 @@ public sealed class LocalMulticastDiscoveryService
 
         var questionType = ReadUInt16(packet, offset);
         var questionClass = (ushort)(ReadUInt16(packet, offset + 2) & 0x7fff);
-        return questionType == 12 && questionClass == 1;
+        if (questionType != 12 || questionClass != 1)
+        {
+            return false;
+        }
+
+        offset += 4;
+        for (var index = 0; index < answerCount; index++)
+        {
+            if (!TryReadDnsName(packet, ref offset, out var answerName) ||
+                offset + 10 > packet.Length)
+            {
+                return false;
+            }
+
+            var answerType = ReadUInt16(packet, offset);
+            var answerClass = (ushort)(ReadUInt16(packet, offset + 2) & 0x7fff);
+            var dataLength = ReadUInt16(packet, offset + 8);
+            offset += 10;
+            if (offset + dataLength > packet.Length)
+            {
+                return false;
+            }
+
+            if (answerType == 12 &&
+                answerClass == 1 &&
+                string.Equals(answerName, questionName, StringComparison.OrdinalIgnoreCase) &&
+                dataLength > 0)
+            {
+                return true;
+            }
+
+            offset += dataLength;
+        }
+
+        return false;
     }
 
     private static Task<IReadOnlyList<DiscoveredHost>> ScanSsdpAsync(
