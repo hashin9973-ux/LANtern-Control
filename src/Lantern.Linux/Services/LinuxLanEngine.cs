@@ -898,6 +898,10 @@ public sealed class LinuxLanEngine : IAsyncDisposable
                     force: false,
                     cancellationToken);
             }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                RaiseStatus($"Device presence check failed: {exception.Message}");
+            }
             finally
             {
                 refreshSync.Release();
