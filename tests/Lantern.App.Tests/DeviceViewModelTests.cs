@@ -19,6 +19,42 @@ namespace Lantern.App.Tests;
 public sealed class DeviceViewModelTests
 {
     [Fact]
+    public void AutomationIds_UseMacIdentityInsteadOfDisplayName()
+    {
+        var registry = new DeviceRegistry();
+        var macAddress = PhysicalAddress.Parse("AABBCCDDEEFF");
+        registry.Observe(
+            IPAddress.Parse("192.168.31.42"),
+            macAddress,
+            DateTimeOffset.UtcNow,
+            "living-room-device");
+
+        var snapshot = Assert.Single(registry.Peek());
+        var viewModel = new DeviceViewModel(_ => Task.CompletedTask);
+        viewModel.Initialize(snapshot, null, isProtectedDevice: false, "Online");
+
+        var rowAutomationId = viewModel.RowAutomationId;
+        Assert.Equal("device_AABBCCDDEEFF", rowAutomationId);
+        Assert.Equal("device_name_AABBCCDDEEFF", viewModel.NameAutomationId);
+        Assert.Equal("download_limit_AABBCCDDEEFF", viewModel.DownloadLimitAutomationId);
+        Assert.Equal("upload_limit_AABBCCDDEEFF", viewModel.UploadLimitAutomationId);
+        Assert.Equal("pause_AABBCCDDEEFF", viewModel.PauseAutomationId);
+
+        viewModel.EditableName = "Renamed device";
+
+        Assert.Equal(rowAutomationId, viewModel.RowAutomationId);
+        Assert.Equal("pause_AABBCCDDEEFF", viewModel.PauseAutomationId);
+    }
+
+    [Fact]
+    public void ScriptRunResult_ReportsSuccessOnlyForZeroExitWithoutTimeout()
+    {
+        Assert.True(new Lantern.App.Services.ScriptRunResult(0, false, "", "").Succeeded);
+        Assert.False(new Lantern.App.Services.ScriptRunResult(1, false, "", "").Succeeded);
+        Assert.False(new Lantern.App.Services.ScriptRunResult(0, true, "", "").Succeeded);
+    }
+
+    [Fact]
     public void ApplicationIcon_ContainsWindowsIconFramesForSmallAndLargeSizes()
     {
         var iconPath = Path.Combine(
@@ -121,6 +157,13 @@ public sealed class DeviceViewModelTests
                         "DomainRulesEmptyState",
                         "ChartDeviceSummaryText",
                         "DeviceSection",
+                        "ScriptAutomationSection",
+                        "ScriptPathTextBox",
+                        "BrowseScriptButton",
+                        "RunScriptNowButton",
+                        "ScriptAutomationCheckBox",
+                        "ScriptAutomationIntervalTextBox",
+                        "ScriptAutomationStatusText",
                     })
                     {
                         Assert.NotNull(window.FindName(name));
@@ -128,7 +171,7 @@ public sealed class DeviceViewModelTests
 
                     var sidebarVersion = Assert.IsType<TextBlock>(
                         window.FindName("SidebarVersionText"));
-                    Assert.Equal("v0.1.8", sidebarVersion.Text);
+                    Assert.Equal("v0.1.9", sidebarVersion.Text);
                     var listLayoutGrid = Assert.IsType<DataGrid>(window.FindName("DeviceGrid"));
                     Assert.True(
                         double.IsPositiveInfinity(listLayoutGrid.MaxHeight),
