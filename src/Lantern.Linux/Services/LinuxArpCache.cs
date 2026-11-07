@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Net.NetworkInformation;
@@ -21,6 +22,67 @@ public static class LinuxArpCache
     {
         var output = await File.ReadAllTextAsync(DefaultPath, cancellationToken);
         return Parse(output, interfaceName, localAddress, prefixLength);
+    }
+
+    public static async Task<bool> DeleteAsync(
+        string interfaceName,
+        IPAddress address,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(interfaceName);
+        ArgumentNullException.ThrowIfNull(address);
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "ip",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add("neigh");
+        startInfo.ArgumentList.Add("del");
+        startInfo.ArgumentList.Add(address.ToString());
+        startInfo.ArgumentList.Add("dev");
+        startInfo.ArgumentList.Add(interfaceName);
+
+        Process process;
+        try
+        {
+            process = Process.Start(startInfo) ??
+                throw new InvalidOperationException("Linux could not start the ip utility.");
+        }
+        catch (System.ComponentModel.Win32Exception exception)
+        {
+            throw new InvalidOperationException(
+                "The ip utility from iproute2 is required to clear the Linux neighbor cache.",
+                exception);
+        }
+
+        using (process)
+        {
+            var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+            await process.WaitForExitAsync(cancellationToken);
+            _ = await outputTask;
+            var error = await errorTask;
+
+            if (process.ExitCode == 0)
+            {
+                return true;
+            }
+
+            if (error.Contains("No such file or directory", StringComparison.OrdinalIgnoreCase) ||
+                error.Contains("No such process", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            throw new InvalidOperationException(
+                string.IsNullOrWhiteSpace(error)
+                    ? $"Linux could not remove neighbor entry {address} from {interfaceName}."
+                    : error.Trim());
+        }
     }
 
     public static IReadOnlyList<LinuxArpCacheEntry> Parse(
