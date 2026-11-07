@@ -556,10 +556,6 @@ public partial class MainWindow : Window
 
     private void UpdateScriptAutomationControls()
     {
-        ScriptPathTextBox.Text = settings.ScriptAutomationPath ?? string.Empty;
-        ScriptAutomationCheckBox.IsChecked = settings.ScriptAutomationEnabled;
-        ScriptAutomationIntervalTextBox.Text =
-            settings.ScriptAutomationIntervalSeconds.ToString();
         RunScriptNowButton.IsEnabled =
             !scriptRunInProgress &&
             !string.IsNullOrWhiteSpace(settings.ScriptAutomationPath) &&
