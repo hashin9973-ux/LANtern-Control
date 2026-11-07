@@ -6,32 +6,32 @@ namespace Lantern.App.Tests;
 public sealed class DiscoveryRefreshResultTests
 {
     [Fact]
-    public void StatusMessage_ReportsPacedPresenceChecks()
+    public void StatusMessage_ReportsPacedLocalNetworkDiscovery()
     {
         var result = new DiscoveryRefreshResult(3, 4, 4);
 
         Assert.Equal(
-            "Device inventory refreshed — 3 cached entries, 4 known devices; 4 paced presence probes sent to previously known IP addresses.",
+            "Device inventory refreshed — 3 neighbor-cache entries, 4 known devices; 4 paced ARP discovery requests sent across the selected local IPv4 segment.",
             result.StatusMessage);
     }
 
     [Fact]
-    public void StatusMessage_ReportsWhenNoPresenceChecksAreDue()
+    public void StatusMessage_ReportsWhenDiscoveryIsRateLimited()
     {
         var result = new DiscoveryRefreshResult(3, 4);
 
         Assert.Equal(
-            "Device inventory refreshed — 3 cached entries, 4 known devices. No presence checks were due; checks are rate-limited.",
+            "Device inventory refreshed — 3 neighbor-cache entries, 4 known devices. No discovery requests were sent; manual discovery is limited to one pass per minute.",
             result.StatusMessage);
     }
 
     [Fact]
-    public void StatusMessage_ReportsWhenPresenceChecksCannotStart()
+    public void StatusMessage_ReportsWhenDiscoveryCannotStart()
     {
         var result = new DiscoveryRefreshResult(3, 4, 0, "Npcap is not available.");
 
         Assert.Equal(
-            "Device inventory refreshed — 3 cached entries, 4 known devices. Live presence checks were unavailable: Npcap is not available.",
+            "Device inventory refreshed — 3 neighbor-cache entries, 4 known devices. Local-network discovery was unavailable: Npcap is not available.",
             result.StatusMessage);
     }
 }
