@@ -93,14 +93,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
         resolvingNames.Clear();
         registry.BeginSession();
         identityMonitor.Reset();
-        foreach (var hint in knownDeviceHints.Where(hint => hint.LastKnownIp is not null))
-        {
-            registry.Remember(
-                hint.LastKnownIp!,
-                hint.MacAddress,
-                hint.LastSeenUtc ?? DateTimeOffset.MinValue,
-                hint.HostName);
-        }
+        SeedRememberedInventory();
 
         var clients = clientMappings.Mappings;
         restoring = false;
@@ -193,13 +186,27 @@ public sealed class PcapLanEngine : IAsyncDisposable
         }
     }
 
-    public async Task<DiscoveryRefreshResult> RefreshNeighborsAsync(
+    public Task<DiscoveryRefreshResult> RefreshNeighborsAsync(
         CancellationToken cancellationToken = default)
     {
+        var activeProfile = profile ??
+            throw new InvalidOperationException("Select an adapter before scanning devices.");
+        return ScanDevicesAsync(activeProfile, cancellationToken);
+    }
+
+    public async Task<DiscoveryRefreshResult> ScanDevicesAsync(
+        AdapterProfile selectedAdapter,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(selectedAdapter);
         await refreshSync.WaitAsync(cancellationToken);
         try
         {
-            return await RefreshNeighborsCoreAsync(cancellationToken);
+            SeedRememberedInventory();
+            var cachedEntries = await RefreshWindowsNeighborCacheAsync(
+                selectedAdapter,
+                cancellationToken);
+            return new DiscoveryRefreshResult(cachedEntries, registry.Peek().Count);
         }
         finally
         {
@@ -207,16 +214,16 @@ public sealed class PcapLanEngine : IAsyncDisposable
         }
     }
 
-    private async Task<DiscoveryRefreshResult> RefreshNeighborsCoreAsync(
-        CancellationToken cancellationToken)
+    private void SeedRememberedInventory()
     {
-        var activeProfile = profile ??
-            throw new InvalidOperationException("Select and start an adapter before refreshing.");
-        var cachedEntries = await RefreshWindowsNeighborCacheAsync(
-            activeProfile,
-            cancellationToken);
-
-        return new DiscoveryRefreshResult(cachedEntries, registry.Peek().Count);
+        foreach (var hint in knownDeviceHints.Where(hint => hint.LastKnownIp is not null))
+        {
+            registry.Remember(
+                hint.LastKnownIp!,
+                hint.MacAddress,
+                hint.LastSeenUtc ?? DateTimeOffset.MinValue,
+                hint.HostName);
+        }
     }
 
     private async Task<int> RefreshWindowsNeighborCacheAsync(
@@ -229,6 +236,16 @@ public sealed class PcapLanEngine : IAsyncDisposable
         var imported = 0;
         foreach (var neighbor in neighbors)
         {
+            if (neighbor.Address.Equals(activeProfile.GatewayAddress))
+            {
+                registry.Remember(
+                    neighbor.Address,
+                    neighbor.MacAddress,
+                    DateTimeOffset.MinValue,
+                    "Gateway");
+                continue;
+            }
+
             if (neighbor.MacAddress.Equals(activeProfile.LocalMac))
             {
                 var observation = identityMonitor.Observe(
@@ -496,7 +513,6 @@ public sealed class PcapLanEngine : IAsyncDisposable
             return;
         }
 
-        var clients = clientMappings.Mappings;
         if (arp.SenderIp.Equals(activeProfile.GatewayAddress))
         {
             gatewayResolution?.TrySetResult(arp.SenderMac);
