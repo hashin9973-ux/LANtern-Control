@@ -147,7 +147,8 @@ disconnecting the selected adapter, suspending, or rebooting.
    then discover responsive hosts on the selected local IPv4 segment using ARP,
    UPnP/SSDP, DNS-SD/mDNS service discovery, ICMP, common TCP services, NetBIOS
    and reverse mDNS. Live IPs without a verified MAC remain visible as
-   inventory-only entries.
+   inventory-only entries. Select **Auto scan** and set an interval from
+   60 to 3600 seconds to refresh the device list periodically while the app is open.
 4. Click **Start control** to enable the selected device rules and live capture.
 5. Enter a download or upload limit in `KB/s`. A value of `0` means unlimited.
 6. Use the **Internet** switch to pause or restore a device's connection.
@@ -175,11 +176,12 @@ change the router configuration.
 ## Device discovery and identity conflicts
 
 **Scan devices** reads the selected adapter's OS neighbor cache and merges
-saved device identities. The ARP/cache pass runs first, with one
-request per candidate at 200 ms intervals and one 150 ms retry for addresses
-that did not reply. Controller and gateway addresses are excluded. Candidate
-discovery is limited to the selected local IPv4 segment (capped to a /24 on
-larger networks) and at most 253 addresses.
+saved device identities. The ARP/cache pass runs first, with one request per
+candidate at 20 ms intervals (up to 50 ARP requests per second) and one 20 ms
+retry for addresses that did not reply. Controller and gateway addresses are
+excluded. Candidate discovery is limited to the selected local IPv4 segment
+(capped to a /24 on larger networks) and at most 253 addresses. A /24 normally
+has 252 candidates after excluding the controller and gateway.
 
 Only addresses without recent reachability evidence receive supplemental
 discovery. Before probing individual addresses, LANtern sends at most one
@@ -193,13 +195,15 @@ connection attempts (ports 443 and 80), followed by at most one NetBIOS
 node-status query and one mDNS reverse-lookup query. It stops probing that
 address after the first positive response. The two link-local multicast
 queries each have a response window of up to 1.4 seconds. Multicast and direct
-probe starts share a global spacing of at least 50 ms; no more than eight
-individual hosts are checked concurrently, and no more than five direct
-fallback probes are sent to any remaining unconfirmed address. The
-supplemental pass has a separate one-minute cooldown per adapter. Both passes
-run only after the user presses **Scan devices**; no whole-subnet discovery
-pass is added to background monitoring. Background presence checks remain
-limited to remembered device addresses.
+probe starts share a global spacing of at least 10 ms (no more than 100 starts
+per second); no more than 32 individual hosts are checked concurrently, and
+no more than five direct fallback probes are sent to any remaining
+unconfirmed address. The supplemental pass has a separate one-minute cooldown
+per adapter. **Auto scan** is optional and disabled by default; when enabled,
+it repeats the full discovery process at the configured interval (60–3600
+seconds) while LANtern remains open. Background presence checks remain a
+separate low-rate task limited to remembered device addresses. Periodic
+full scans do not change interception rules or expand the poisoning loop.
 
 Only explicit positive protocol responses count as live hosts; a TCP timeout
 or cached neighbor entry is not treated as proof of current reachability.
