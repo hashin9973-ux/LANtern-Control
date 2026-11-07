@@ -40,10 +40,16 @@ public sealed class LocalHostDiscoveryServiceTests
                 System.Net.IPAddress.Parse("192.168.31.23"),
                 HostDiscoveryMethod.Mdns,
                 HostName: "speaker"),
+            new DiscoveredHost(
+                System.Net.IPAddress.Parse("192.168.31.24"),
+                HostDiscoveryMethod.Ssdp),
+            new DiscoveredHost(
+                System.Net.IPAddress.Parse("192.168.31.25"),
+                HostDiscoveryMethod.MdnsServiceBrowse),
         ],
         CandidateHosts: 252);
 
-        Assert.Equal(4, result.Hosts.Count);
+        Assert.Equal(6, result.Hosts.Count);
         Assert.Equal(1, result.IcmpHosts);
         Assert.Equal(1, result.TcpHosts);
         Assert.Equal(1, result.NetBiosHosts);
@@ -52,6 +58,7 @@ public sealed class LocalHostDiscoveryServiceTests
         Assert.Equal(1, result.MdnsServiceHosts);
         Assert.Contains("252 unconfirmed local candidate(s)", result.StatusMessage, StringComparison.Ordinal);
         Assert.Contains("at least 50 ms between starts", result.StatusMessage, StringComparison.Ordinal);
+        Assert.Contains("up to two link-local multicast queries", result.StatusMessage, StringComparison.Ordinal);
         Assert.Contains("at most 8 concurrent hosts", result.StatusMessage, StringComparison.Ordinal);
         Assert.Contains("no more than 5 direct probes per remaining address", result.StatusMessage, StringComparison.Ordinal);
         Assert.Contains("SSDP 1, DNS-SD/mDNS 1, ICMP 1, TCP 1, NetBIOS 1, reverse mDNS 1", result.StatusMessage, StringComparison.Ordinal);
