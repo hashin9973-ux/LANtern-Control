@@ -882,7 +882,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void CopyAutomationIdsButton_OnClick(
+    private void CopyAutomationScriptButton_OnClick(
         object sender,
         RoutedEventArgs eventArgs)
     {
@@ -891,21 +891,16 @@ public partial class MainWindow : Window
             return;
         }
 
-        var automationIds = string.Join(
-            Environment.NewLine,
-            $"Device row: {device.RowAutomationId}",
-            $"Device name: {device.NameAutomationId}",
-            $"Download limit: {device.DownloadLimitAutomationId}",
-            $"Upload limit: {device.UploadLimitAutomationId}",
-            $"Pause switch: {device.PauseAutomationId}");
         try
         {
-            Clipboard.SetText(automationIds);
-            SetStatus($"Copied Automation IDs for {device.DisplayName}.", null);
+            Clipboard.SetText(DeviceAutomationScriptBuilder.Build(device));
+            SetStatus(
+                $"Copied a PowerShell automation script for {device.DisplayName}. Paste it into the Script automation editor.",
+                null);
         }
         catch (Exception exception)
         {
-            SetStatus($"Could not copy Automation IDs: {exception.Message}", false);
+            SetStatus($"Could not copy the automation script: {exception.Message}", false);
         }
     }
 
@@ -2037,6 +2032,9 @@ public partial class MainWindow : Window
             ? Visibility.Visible
             : Visibility.Collapsed;
         DomainRulesSection.Visibility = target == DomainRulesSection
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        ScriptAutomationSection.Visibility = target == ScriptAutomationSection
             ? Visibility.Visible
             : Visibility.Collapsed;
     }
