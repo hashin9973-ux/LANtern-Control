@@ -93,6 +93,13 @@ public sealed class DeviceRegistry
             });
     }
 
+    public bool Remove(PhysicalAddress macAddress)
+    {
+        ArgumentNullException.ThrowIfNull(macAddress);
+        var key = TrafficPolicy.NormalizeMac(macAddress.ToString());
+        return devices.TryRemove(key, out _);
+    }
+
     public void SetHostName(PhysicalAddress macAddress, string? hostName)
     {
         if (string.IsNullOrWhiteSpace(hostName))

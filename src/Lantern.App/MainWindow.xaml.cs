@@ -237,7 +237,7 @@ public partial class MainWindow : Window
         try
         {
             UpdateKnownDeviceHints();
-            SetStatus("Reading the neighbor cache and saved device history…", null);
+            SetStatus("Refreshing saved device history and checking known device addresses…", null);
             var result = await engine.ScanDevicesAsync(adapter);
             RefreshDevices(null, EventArgs.Empty);
             await SaveSettingsIfDirtyAsync();
@@ -247,6 +247,89 @@ public partial class MainWindow : Window
         catch (Exception exception)
         {
             SetStatus(exception.Message, false);
+        }
+        finally
+        {
+            operationInProgress = false;
+            UpdateButtons();
+        }
+    }
+
+    private async void ClearDeviceCacheButton_OnClick(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        if (operationInProgress)
+        {
+            return;
+        }
+
+        var offlineDevices = Devices
+            .Where(device => !device.IsOnline && !device.IsProtected)
+            .ToArray();
+        if (offlineDevices.Length == 0)
+        {
+            DetailStatusText.Text = "No offline device cache entries to clear.";
+            return;
+        }
+
+        operationInProgress = true;
+        UpdateButtons();
+        try
+        {
+            var selectedAdapter = AdapterSelector.SelectedItem as AdapterProfile;
+            var osEntriesRemoved = 0;
+            var osEntriesNotRemoved = 0;
+            foreach (var device in offlineDevices)
+            {
+                if (selectedAdapter is not null &&
+                    IPAddress.TryParse(device.IpAddress, out var address))
+                {
+                    if (await WindowsNeighborCache.DeleteAsync(
+                            selectedAdapter,
+                            address,
+                            CancellationToken.None))
+                    {
+                        osEntriesRemoved++;
+                    }
+                    else
+                    {
+                        osEntriesNotRemoved++;
+                    }
+                }
+
+                var macAddress = PhysicalAddress.Parse(device.MacKey);
+                engine.ForgetDevice(macAddress);
+                registry.Remove(macAddress);
+                if (settings.Devices.TryGetValue(device.MacKey, out var preferences))
+                {
+                    preferences.LastKnownIp = null;
+                    preferences.LastSeenUtc = null;
+                }
+
+                deviceIndex.Remove(device.MacKey);
+                Devices.Remove(device);
+            }
+
+            UpdateKnownDeviceHints();
+            settingsDirty = true;
+            await SaveSettingsIfDirtyAsync();
+            RefreshDevices(null, EventArgs.Empty);
+            var cacheNote = osEntriesNotRemoved == 0
+                ? $"Removed {osEntriesRemoved} matching Windows neighbor-cache entr" +
+                  $"{(osEntriesRemoved == 1 ? "y" : "ies")}."
+                : $"{osEntriesRemoved} Windows neighbor-cache entries were removed; " +
+                  $"{osEntriesNotRemoved} were already absent or could not be removed.";
+            SetStatus(
+                $"Cleared {offlineDevices.Length} offline device cache entr" +
+                $"{(offlineDevices.Length == 1 ? "y" : "ies")}. {cacheNote} " +
+                "Saved names and rules were preserved.",
+                true);
+        }
+        catch (Exception exception) when (
+            exception is IOException or InvalidOperationException or FormatException)
+        {
+            SetStatus($"Could not clear the device cache: {exception.Message}", false);
         }
         finally
         {
@@ -1068,6 +1151,7 @@ public partial class MainWindow : Window
         StopButton.IsEnabled = !operationInProgress && engine.IsRunning;
         ScanButton.IsEnabled = !operationInProgress &&
                                AdapterSelector.SelectedItem is AdapterProfile;
+        ClearDeviceCacheButton.IsEnabled = !operationInProgress;
         AdapterSelector.IsEnabled = !operationInProgress && !engine.IsRunning;
         StartButton.Visibility = engine.IsRunning ? Visibility.Collapsed : Visibility.Visible;
         ScanButton.Visibility = AdapterSelector.SelectedItem is AdapterProfile

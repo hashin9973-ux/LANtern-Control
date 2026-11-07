@@ -128,7 +128,12 @@ public sealed class DeviceViewModelTests
 
                     var sidebarVersion = Assert.IsType<TextBlock>(
                         window.FindName("SidebarVersionText"));
-                    Assert.Equal("v0.1.4", sidebarVersion.Text);
+                    Assert.Equal("v0.1.5", sidebarVersion.Text);
+                    var listLayoutGrid = Assert.IsType<DataGrid>(window.FindName("DeviceGrid"));
+                    Assert.True(
+                        double.IsPositiveInfinity(listLayoutGrid.MaxHeight),
+                        "The device list must not be trapped in a fixed-height internal viewport.");
+                    Assert.NotNull(window.FindName("ClearDeviceCacheButton"));
 
                     var minimizeButton = Assert.IsType<Button>(
                         window.FindName("MinimizeWindowButton"));
@@ -267,7 +272,7 @@ public sealed class DeviceViewModelTests
                     Assert.Equal(new Thickness(0), deviceMetadata.Margin);
                     var macAddress = Assert.IsType<TextBlock>(
                         deviceIdentity.FindName("DeviceMacAddress"));
-                    Assert.Equal(9, macAddress.FontSize);
+                    Assert.Equal(11, macAddress.FontSize);
                     var xaml = File.ReadAllText(Path.Combine(
                         GetProjectRoot(),
                         "src",

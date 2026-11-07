@@ -230,7 +230,7 @@ public partial class MainWindow : Window
         try
         {
             UpdateKnownDeviceHints();
-            SetStatus("Reading the local neighbor cache and saved device history...");
+            SetStatus("Refreshing saved device history and checking known device addresses...");
             var result = await engine.ScanDevicesAsync(adapter);
             RefreshDashboard();
             await settingsStore.SaveAsync(settings);
@@ -770,6 +770,98 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void ClearDeviceCacheButton_OnClick(
+        object? sender,
+        RoutedEventArgs eventArgs)
+    {
+        if (demoMode || busy)
+        {
+            return;
+        }
+
+        var offlineDevices = Devices
+            .Where(device => !device.IsOnline && !device.IsProtected)
+            .ToArray();
+        if (offlineDevices.Length == 0)
+        {
+            SetStatus("No offline device cache entries to clear.");
+            return;
+        }
+
+        busy = true;
+        UpdateButtons();
+        try
+        {
+            var selectedAdapter = AdapterSelector.SelectedItem as AdapterProfile;
+            var osEntriesRemoved = 0;
+            var osEntriesNotRemoved = 0;
+            var osCacheWarning = string.Empty;
+            foreach (var device in offlineDevices)
+            {
+                if (selectedAdapter is not null &&
+                    IPAddress.TryParse(device.IpAddress, out var address))
+                {
+                    try
+                    {
+                        if (await LinuxArpCache.DeleteAsync(
+                                selectedAdapter.Name,
+                                address,
+                                CancellationToken.None))
+                        {
+                            osEntriesRemoved++;
+                        }
+                        else
+                        {
+                            osEntriesNotRemoved++;
+                        }
+                    }
+                    catch (Exception exception) when (
+                        exception is IOException or InvalidOperationException)
+                    {
+                        osEntriesNotRemoved++;
+                        osCacheWarning = exception.Message;
+                    }
+                }
+
+                var macAddress = PhysicalAddress.Parse(device.MacKey);
+                engine.ForgetDevice(macAddress);
+                registry.Remove(macAddress);
+                if (settings.Devices.TryGetValue(device.MacKey, out var preferences))
+                {
+                    preferences.LastKnownIp = null;
+                    preferences.LastSeenUtc = null;
+                }
+
+                devicesByMac.Remove(device.MacKey);
+                Devices.Remove(device);
+            }
+
+            UpdateKnownDeviceHints();
+            await settingsStore.SaveAsync(settings);
+            RefreshDashboard();
+            var cacheNote = osEntriesNotRemoved == 0
+                ? $"Removed {osEntriesRemoved} matching Linux neighbor-cache entr" +
+                  $"{(osEntriesRemoved == 1 ? "y" : "ies")}."
+                : $"{osEntriesRemoved} Linux neighbor-cache entries were removed; " +
+                  $"{osEntriesNotRemoved} were already absent or could not be removed. " +
+                  osCacheWarning;
+            SetStatus(
+                $"Cleared {offlineDevices.Length} offline device cache entr" +
+                $"{(offlineDevices.Length == 1 ? "y" : "ies")}. {cacheNote} " +
+                "Saved names and rules were preserved.");
+        }
+        catch (Exception exception) when (
+            exception is IOException or InvalidOperationException or FormatException)
+        {
+            SetStatus($"Could not clear the device cache: {exception.Message}");
+        }
+        finally
+        {
+            busy = false;
+            UpdateButtons();
+        }
+    }
+
     private void ClearActivityButton_OnClick(object? sender, RoutedEventArgs eventArgs)
     {
         ClearObservedActivity();
@@ -860,6 +952,7 @@ public partial class MainWindow : Window
 
     private void UpdateButtons()
     {
+        ClearDeviceCacheButton.IsEnabled = !busy && !demoMode;
         if (demoMode)
         {
             StartButton.IsVisible = false;

@@ -9,7 +9,7 @@ public enum DevicePresence
 
 public static class DevicePresencePolicy
 {
-    public static TimeSpan OfflineAfter { get; } = TimeSpan.FromSeconds(15);
+    public static TimeSpan OfflineAfter { get; } = TimeSpan.FromSeconds(120);
 
     // Keep a last-known inventory entry visible for 30 days after its last
     // observation. Missing timestamps represent remembered, not live, devices.

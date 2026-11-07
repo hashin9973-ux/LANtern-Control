@@ -20,6 +20,9 @@ public sealed class LinuxLanEngine : IAsyncDisposable
     private readonly SemaphoreSlim stopSync = new(1, 1);
     private readonly ClientMappingCache clientMappings = new();
     private readonly ArpIdentityMonitor identityMonitor = new();
+    private readonly ConcurrentDictionary<IPAddress, DateTimeOffset> lastPresenceProbeAt = new();
+    private DateTimeOffset lastPresenceProbeBatchAt = DateTimeOffset.MinValue;
+    private string? presenceProbeAdapterId;
     private readonly ResolvedDeviceNameClaims resolvedNameClaims = new(Dns.GetHostName());
     private ConcurrentDictionary<IPAddress, PhysicalAddress> clients => clientMappings.Mappings;
     private readonly ConcurrentDictionary<string, byte> resolvingNames =
@@ -39,6 +42,9 @@ public sealed class LinuxLanEngine : IAsyncDisposable
     private LinuxIpForwardingSession? ipForwardingSession;
     private TaskCompletionSource<PhysicalAddress>? gatewayResolution;
     private KnownDeviceHint[] knownDeviceHints = [];
+    private AdapterProfile? temporaryProbeProfile;
+    private HashSet<IPAddress>? temporaryProbeTargets;
+    private ArpIdentityMonitor? temporaryProbeIdentityMonitor;
     private string[] rejectedResolvedNames = [];
     private volatile bool controlling;
     private volatile bool restoring;
@@ -68,6 +74,15 @@ public sealed class LinuxLanEngine : IAsyncDisposable
     public event EventHandler<DeviceDomainObservedEventArgs>? DeviceDomainObserved;
 
     public event EventHandler<string>? IdentityAlertDetected;
+
+    public void ForgetDevice(PhysicalAddress macAddress)
+    {
+        foreach (var address in clientMappings.RemoveByMac(macAddress))
+        {
+            frameRouter?.RemoveClient(address);
+            lastPresenceProbeAt.TryRemove(address, out _);
+        }
+    }
 
     public void ReplaceKnownDeviceHints(IEnumerable<KnownDeviceHint> hints)
     {
@@ -239,8 +254,26 @@ public sealed class LinuxLanEngine : IAsyncDisposable
                 selectedAdapter.PrefixLength,
                 cancellationToken);
             var imported = ImportCachedNeighbors(selectedAdapter, cached);
+            var probesSent = 0;
+            string? probeWarning = null;
+            try
+            {
+                probesSent = await ProbeKnownAddressesAsync(
+                    selectedAdapter,
+                    force: true,
+                    cancellationToken);
+            }
+            catch (Exception exception) when (
+                !IsRunning && exception is not OperationCanceledException)
+            {
+                probeWarning = exception.Message;
+            }
 
-            return new DiscoveryRefreshResult(imported, registry.Peek().Count);
+            return new DiscoveryRefreshResult(
+                imported,
+                registry.Peek().Count,
+                probesSent,
+                probeWarning);
         }
         finally
         {
@@ -258,6 +291,190 @@ public sealed class LinuxLanEngine : IAsyncDisposable
                 hint.LastSeenUtc ?? DateTimeOffset.MinValue,
                 hint.HostName,
                 hint.LastSeenUtc);
+        }
+    }
+
+    private async Task<int> ProbeKnownAddressesAsync(
+        AdapterProfile activeProfile,
+        bool force,
+        CancellationToken cancellationToken)
+    {
+        if (!string.Equals(
+                presenceProbeAdapterId,
+                activeProfile.Id,
+                StringComparison.Ordinal))
+        {
+            lastPresenceProbeAt.Clear();
+            lastPresenceProbeBatchAt = DateTimeOffset.MinValue;
+            presenceProbeAdapterId = activeProfile.Id;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (lastPresenceProbeBatchAt != DateTimeOffset.MinValue &&
+            now >= lastPresenceProbeBatchAt &&
+            now - lastPresenceProbeBatchAt < DeviceProbePolicy.ProbeInterval)
+        {
+            return 0;
+        }
+
+        var targets = DeviceProbePolicy.GetTargets(
+            registry.Peek(),
+            activeProfile,
+            now,
+            force,
+            lastPresenceProbeAt);
+        if (targets.Count == 0)
+        {
+            return 0;
+        }
+
+        lastPresenceProbeBatchAt = now;
+        if (arpDevice is not null && injectionDevice is not null)
+        {
+            return await SendPresenceProbesAsync(
+                (address, bytes) =>
+                {
+                    SendArpPacket(bytes);
+                    lastPresenceProbeAt[address] = DateTimeOffset.UtcNow;
+                },
+                activeProfile,
+                targets,
+                cancellationToken);
+        }
+
+        var captureDevice = LibPcapLiveDeviceList.Instance
+            .FirstOrDefault(candidate => candidate.MacAddress?.Equals(activeProfile.LocalMac) == true)
+            ?? throw new InvalidOperationException(
+                $"libpcap could not find adapter '{activeProfile.Name}' for device presence checks.");
+        var probeInjector = new LibPcapLiveDevice(
+            captureDevice.Interface ??
+            throw new InvalidOperationException("The selected adapter has no libpcap interface."));
+
+        temporaryProbeProfile = activeProfile;
+        temporaryProbeTargets = targets.ToHashSet();
+        temporaryProbeIdentityMonitor = new ArpIdentityMonitor();
+        captureDevice.OnPacketArrival += OnTemporaryPresencePacketArrival;
+        var captureOpened = false;
+        var injectorOpened = false;
+        var captureStarted = false;
+        try
+        {
+            captureDevice.Open(LinuxCaptureConfiguration.CreateForArpDiscovery());
+            captureOpened = true;
+            captureDevice.Filter = "arp";
+            captureDevice.StartCapture();
+            captureStarted = true;
+
+            probeInjector.Open(LinuxCaptureConfiguration.CreateForForwarding());
+            injectorOpened = true;
+            return await SendPresenceProbesAsync(
+                (address, bytes) =>
+                {
+                    lock (injectionSync)
+                    {
+                        probeInjector.SendPacket(bytes);
+                    }
+
+                    lastPresenceProbeAt[address] = DateTimeOffset.UtcNow;
+                },
+                activeProfile,
+                targets,
+                cancellationToken);
+        }
+        finally
+        {
+            if (captureStarted)
+            {
+                try
+                {
+                    captureDevice.StopCapture();
+                }
+                catch (InvalidOperationException)
+                {
+                }
+            }
+
+            captureDevice.OnPacketArrival -= OnTemporaryPresencePacketArrival;
+            if (captureOpened)
+            {
+                captureDevice.Close();
+            }
+
+            if (injectorOpened)
+            {
+                probeInjector.Close();
+            }
+
+            temporaryProbeProfile = null;
+            temporaryProbeTargets = null;
+            temporaryProbeIdentityMonitor = null;
+        }
+    }
+
+    private static async Task<int> SendPresenceProbesAsync(
+        Action<IPAddress, byte[]> sendProbe,
+        AdapterProfile activeProfile,
+        IReadOnlyList<IPAddress> targets,
+        CancellationToken cancellationToken)
+    {
+        var sent = 0;
+        foreach (var address in targets)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            sendProbe(
+                address,
+                EthernetFrameCodec.BuildArpRequest(
+                    activeProfile.LocalMac,
+                    activeProfile.LocalAddress,
+                    address));
+            sent++;
+            await Task.Delay(DeviceProbePolicy.RequestSpacing, cancellationToken);
+        }
+
+        if (sent > 0)
+        {
+            await Task.Delay(DeviceProbePolicy.ReplyWindow, cancellationToken);
+        }
+
+        return sent;
+    }
+
+    private void OnTemporaryPresencePacketArrival(object sender, PacketCapture capture)
+    {
+        var activeProfile = temporaryProbeProfile;
+        var targets = temporaryProbeTargets;
+        var monitor = temporaryProbeIdentityMonitor;
+        if (activeProfile is null ||
+            targets is null ||
+            monitor is null ||
+            !EthernetFrameCodec.TryParseArp(capture.Data, out var arp) ||
+            arp.Operation != ArpOperation.Reply ||
+            !arp.HasConsistentSender ||
+            !arp.TargetIp.Equals(activeProfile.LocalAddress) ||
+            !targets.Contains(arp.SenderIp) ||
+            IsZeroOrBroadcast(arp.SenderMac))
+        {
+            return;
+        }
+
+        var observedAt = DateTimeOffset.UtcNow;
+        var identity = monitor.Observe(
+            arp,
+            activeProfile.LocalAddress,
+            activeProfile.LocalMac,
+            observedAt);
+        if (identity.Warning is not null)
+        {
+            IdentityAlertDetected?.Invoke(this, identity.Warning);
+        }
+
+        if (!identity.IsConflict)
+        {
+            registry.Observe(
+                arp.SenderIp,
+                arp.SenderMac,
+                observedAt,
+                GetKnownHostName(arp.SenderMac));
         }
     }
 
@@ -689,7 +906,39 @@ public sealed class LinuxLanEngine : IAsyncDisposable
     private async Task RunMaintenanceAsync(CancellationToken cancellationToken)
     {
         using var poisonTimer = new PeriodicTimer(TimeSpan.FromSeconds(5));
-        await RunTimerAsync(poisonTimer, PoisonClients, cancellationToken);
+        await Task.WhenAll(
+            RunTimerAsync(poisonTimer, PoisonClients, cancellationToken),
+            RunPresenceProbeLoopAsync(cancellationToken));
+    }
+
+    private async Task RunPresenceProbeLoopAsync(CancellationToken cancellationToken)
+    {
+        using var probeTimer = new PeriodicTimer(DeviceProbePolicy.ProbeInterval);
+        while (await probeTimer.WaitForNextTickAsync(cancellationToken))
+        {
+            var activeProfile = profile;
+            if (activeProfile is null || !controlling || restoring)
+            {
+                continue;
+            }
+
+            await refreshSync.WaitAsync(cancellationToken);
+            try
+            {
+                await ProbeKnownAddressesAsync(
+                    activeProfile,
+                    force: false,
+                    cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                RaiseStatus($"Device presence check failed: {exception.Message}");
+            }
+            finally
+            {
+                refreshSync.Release();
+            }
+        }
     }
 
     private static async Task RunTimerAsync(

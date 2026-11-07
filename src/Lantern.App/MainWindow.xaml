@@ -1592,18 +1592,27 @@
                                            FontSize="18"
                                            FontWeight="Bold" />
                             </StackPanel>
-                            <TextBlock x:Name="DeviceCountText"
-                                       Grid.Column="1"
-                                       VerticalAlignment="Center"
-                                       Text="0 devices"
-                                       Foreground="{StaticResource SecondaryText}" />
+                            <StackPanel Grid.Column="1"
+                                        Orientation="Horizontal"
+                                        VerticalAlignment="Center">
+                                <Button x:Name="ClearDeviceCacheButton"
+                                        Margin="0,0,14,0"
+                                        MinHeight="34"
+                                        Padding="13,6"
+                                        Click="ClearDeviceCacheButton_OnClick"
+                                        Content="Clear device cache"
+                                        ToolTip="Remove offline devices from the list. Saved names and rules are preserved." />
+                                <TextBlock x:Name="DeviceCountText"
+                                           VerticalAlignment="Center"
+                                           Text="0 devices"
+                                           Foreground="{StaticResource SecondaryText}" />
+                            </StackPanel>
                         </Grid>
                         <Separator Grid.Row="1" Background="{StaticResource Border}" />
 
                         <Grid Grid.Row="2">
                             <DataGrid x:Name="DeviceGrid"
                                       MinHeight="270"
-                                      MaxHeight="430"
                                       RowHeight="68"
                                       ItemsSource="{Binding Devices}"
                                       AutoGenerateColumns="False"
@@ -1656,7 +1665,7 @@
                                                             <TextBlock x:Name="DeviceMacAddress"
                                                                        Text="{Binding MacAddress}"
                                                                        Foreground="{StaticResource SecondaryText}"
-                                                                       FontSize="9" />
+                                                                       FontSize="11" />
                                                             <TextBlock Margin="8,0,0,0"
                                                                        Text="{Binding ProtectedReason}"
                                                                        Foreground="{StaticResource Accent}"

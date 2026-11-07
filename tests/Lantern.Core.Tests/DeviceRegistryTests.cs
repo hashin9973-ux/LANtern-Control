@@ -8,6 +8,26 @@ namespace Lantern.Core.Tests;
 public sealed class DeviceRegistryTests
 {
     [Fact]
+    public void Remove_DeletesOnlyTheRequestedDeviceIdentity()
+    {
+        var registry = new DeviceRegistry();
+        var firstIp = IPAddress.Parse("192.168.31.20");
+        var secondIp = IPAddress.Parse("192.168.31.21");
+        var firstMac = PhysicalAddress.Parse("AABBCCDDEE20");
+        var secondMac = PhysicalAddress.Parse("AABBCCDDEE21");
+        var now = DateTimeOffset.Parse("2026-11-06T12:00:00Z");
+
+        registry.Observe(firstIp, firstMac, now, "Phone");
+        registry.Observe(secondIp, secondMac, now, "Tablet");
+
+        Assert.True(registry.Remove(firstMac));
+
+        var remaining = Assert.Single(registry.Peek());
+        Assert.Equal(secondMac, remaining.MacAddress);
+        Assert.False(registry.Remove(firstMac));
+    }
+
+    [Fact]
     public void Remember_RestoresLastSeenTimestampWithoutMarkingDeviceOnline()
     {
         var registry = new DeviceRegistry();
