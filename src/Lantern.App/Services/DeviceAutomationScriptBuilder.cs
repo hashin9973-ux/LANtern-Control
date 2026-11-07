@@ -128,8 +128,42 @@ public static class DeviceAutomationScriptBuilder
             $UploadLimitAutomationId = '{{device.UploadLimitAutomationId}}'
             $PauseAutomationId = '{{device.PauseAutomationId}}'
 
-            # Resolve the row first. If it cannot be found, scroll it into view in LANtern and retry.
-            $null = Get-LanternElement -AutomationId $DeviceRowAutomationId
+            # The editor is a separate page, so switch back to Overview before targeting device controls.
+            $OverviewNavigationButton = Get-LanternElement -AutomationId 'nav_overview'
+            $OverviewNavigationButton.GetCurrentPattern(
+                [System.Windows.Automation.InvokePattern]::Pattern
+            ).Invoke()
+            Start-Sleep -Milliseconds 500
+
+            # Bring the target row into the visible device list. This also handles DataGrid virtualization.
+            $MainScrollViewer = Get-LanternElement -AutomationId 'main_scroll_viewer'
+            $ScrollPattern = $MainScrollViewer.GetCurrentPattern(
+                [System.Windows.Automation.ScrollPattern]::Pattern
+            )
+            $DeviceRow = $null
+            for ($attempt = 0; $attempt -lt 400 -and $null -eq $DeviceRow; $attempt++) {
+                try {
+                    $DeviceRow = Get-LanternElement -AutomationId $DeviceRowAutomationId
+                }
+                catch {
+                    $DeviceRow = $null
+                }
+
+                if ($null -eq $DeviceRow) {
+                    if (-not $ScrollPattern.Current.VerticallyScrollable) {
+                        break
+                    }
+
+                    $ScrollPattern.ScrollVertical(
+                        [System.Windows.Automation.ScrollAmount]::SmallIncrement
+                    )
+                    Start-Sleep -Milliseconds 40
+                }
+            }
+
+            if ($null -eq $DeviceRow) {
+                throw "Could not bring device row '$DeviceRowAutomationId' into view. Scroll to that row in Overview, then retry."
+            }
 
             # Examples — uncomment and edit only the actions you intend to run.
             # Rename this device:
