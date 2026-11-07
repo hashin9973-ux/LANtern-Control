@@ -145,8 +145,9 @@ disconnecting the selected adapter, suspending, or rebooting.
    network you want to manage.
 3. Click **Scan devices** to read the neighbor cache and saved device history,
    then discover responsive hosts on the selected local IPv4 segment using ARP,
-   ICMP, common TCP services, NetBIOS and mDNS. Live IPs without a verified MAC
-   remain visible as inventory-only entries.
+   UPnP/SSDP, DNS-SD/mDNS service discovery, ICMP, common TCP services, NetBIOS
+   and reverse mDNS. Live IPs without a verified MAC remain visible as
+   inventory-only entries.
 4. Click **Start control** to enable the selected device rules and live capture.
 5. Enter a download or upload limit in `KB/s`. A value of `0` means unlimited.
 6. Use the **Internet** switch to pause or restore a device's connection.
