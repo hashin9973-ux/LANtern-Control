@@ -4,7 +4,7 @@
 
 # LANtern Control — Open-Source SelfishNet Alternative for Windows and Linux
 
-<a href="https://github.com/hashin9973-ux/LANtern-Control/releases/latest"><img alt="Release v0.1.3" src="https://img.shields.io/badge/release-v0.1.4-C51B3A?style=flat-square"></a>
+<a href="https://github.com/hashin9973-ux/LANtern-Control/releases/latest"><img alt="Release v0.1.5" src="https://img.shields.io/badge/release-v0.1.5-C51B3A?style=flat-square"></a>
 <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-C51B3A?style=flat-square"></a>
 <img alt="C#" src="https://img.shields.io/badge/language-C%23-239120?style=flat-square&amp;logo=csharp">
 <img alt=".NET 8" src="https://img.shields.io/badge/.NET-8.0-512BD4?style=flat-square&amp;logo=dotnet">
@@ -23,7 +23,7 @@ alternative with a modern desktop interface, LANtern Control is built for that
 use case.
 
 > [!IMPORTANT]
-> Windows `v0.1.4` is the current release. Linux `v0.1.0` is available as a
+> Windows `v0.1.5` is the current release. Linux `v0.1.0` is available as a
 > public beta AppImage. **macOS remains a work in progress (WIP).**
 
 ## Features
@@ -97,7 +97,7 @@ Download the latest version from [GitHub Releases](https://github.com/hashin9973
 
 ### Windows installer
 
-1. Download `LANtern-Control-Setup-v0.1.4.msi`.
+1. Download `LANtern-Control-Setup-v0.1.5.msi`.
 2. Run the setup program.
 3. Choose the installation folder and whether to create Start Menu or desktop
    shortcuts.
@@ -105,7 +105,7 @@ Download the latest version from [GitHub Releases](https://github.com/hashin9973
 
 ### Windows portable version
 
-1. Download `LANtern-Control-v0.1.4-win-x64.zip`.
+1. Download `LANtern-Control-v0.1.5-win-x64.zip`.
 2. Extract the complete archive to a folder where it can remain.
 3. Run `LANtern Control.exe` as Administrator from that folder. Keep the
    extracted files together; no application installation is required.
@@ -171,17 +171,22 @@ change the router configuration.
 
 ## Device discovery and identity conflicts
 
-**Scan devices** is deliberately passive. It reads the selected adapter's OS
-neighbor cache and merges previously observed/saved device identities. It does
-not send subnet-wide ARP requests, unicast reachability probes, or ping sweeps,
-and it does not add cache-only entries to the forwarding/interception map.
-Background neighbor-probe loops have been removed.
+**Scan devices** reads the selected adapter's OS neighbor cache and merges
+previously observed/saved device identities. To determine whether a remembered
+device is currently reachable, LANtern sends one ARP request to each previously
+known IP address, spaced 150 ms apart, then listens for replies. It does not
+enumerate or probe unknown subnet addresses, perform ping sweeps, or repeatedly
+probe every device every few seconds. While control is running, only known
+devices that have not been observed for at least 45 seconds are checked, no
+more than once per minute.
 
-Previously observed devices remain visible as offline history instead of being
-counted as connected. When an actual last-seen timestamp is available, an
-entry is retained for up to 30 days after that observation. A cache-only or
-legacy entry may have no trustworthy last-seen time; it is shown as historical
-offline inventory, not as a currently reachable device.
+A responding remembered device is marked online when LANtern receives its
+ARP reply or observes its traffic. A known device is treated as online for up
+to 120 seconds after its last observation, allowing quiet devices time to
+answer a paced presence check. After missed checks, it is shown as offline.
+Offline history with a real last-seen timestamp is retained for up to 30 days.
+Use **Clear device cache** to remove offline rows; saved aliases, limits, and
+domain rules are kept.
 
 LANtern raises a **Potential ARP identity conflict** warning when passive
 observations show inconsistent Ethernet/ARP sender addresses, an IP address
@@ -195,8 +200,10 @@ DHCP lease history, or managed-switch telemetry provide stronger evidence.
 Software cannot increase Wi-Fi radio range or scan through walls. Live
 discovery is limited by the selected adapter's radio coverage, the local
 Layer-2 network, access-point isolation, VLAN boundaries, and packets that are
-already visible to the adapter. A device that is powered off or silent cannot
-be newly detected; only a previously recorded identity can be shown as offline.
+already visible to the adapter. A device that has never been observed cannot be confirmed from a silent
+network. LANtern can check only previously known IP addresses; if a remembered
+device moves to a different IP and emits no traffic, its new address may not be
+known until it communicates or a fresh DHCP/ARP observation is captured.
 
 To avoid affecting every discovered device, packet interception is now scoped
 to devices with an explicit pause, non-zero rate limit, or domain-blocking rule.
@@ -249,7 +256,7 @@ enable WinPcap API-compatible mode if offered, and restart LANtern Control.
 - Make sure the controller and devices are on the same normal LAN, not an
   isolated guest network.
 - Run LANtern Control as Administrator.
-- Click **Scan devices** to refresh the passive device inventory.
+- Click **Scan devices** to refresh the neighbor cache and check previously known device addresses.
 
 ### A device loses connectivity
 
