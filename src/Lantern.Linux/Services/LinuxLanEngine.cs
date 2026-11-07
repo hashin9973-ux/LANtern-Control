@@ -371,10 +371,6 @@ public sealed class LinuxLanEngine : IAsyncDisposable
             {
                 lastDiscoveryProbeBatchAt = DateTimeOffset.UtcNow;
             }
-            else
-            {
-                lastPresenceProbeBatchAt = DateTimeOffset.UtcNow;
-            }
         }
 
         if (arpDevice is not null && injectionDevice is not null)
