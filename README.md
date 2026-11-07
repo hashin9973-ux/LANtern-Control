@@ -4,7 +4,7 @@
 
 # LANtern Control — Open-Source SelfishNet Alternative for Windows and Linux
 
-<a href="https://github.com/humane125/LANtern-Control/releases/latest"><img alt="Release v0.1.3" src="https://img.shields.io/badge/release-v0.1.4-C51B3A?style=flat-square"></a>
+<a href="https://github.com/hashin9973-ux/LANtern-Control/releases/latest"><img alt="Release v0.1.3" src="https://img.shields.io/badge/release-v0.1.4-C51B3A?style=flat-square"></a>
 <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-C51B3A?style=flat-square"></a>
 <img alt="C#" src="https://img.shields.io/badge/language-C%23-239120?style=flat-square&amp;logo=csharp">
 <img alt=".NET 8" src="https://img.shields.io/badge/.NET-8.0-512BD4?style=flat-square&amp;logo=dotnet">
@@ -93,7 +93,7 @@ The desktop interface continues to run as the normal user.
 
 ## Installation
 
-Download the latest version from [GitHub Releases](https://github.com/humane125/LANtern-Control/releases/latest).
+Download the latest version from [GitHub Releases](https://github.com/hashin9973-ux/LANtern-Control/releases/latest).
 
 ### Windows installer
 
@@ -296,7 +296,7 @@ traffic without permission may violate policies or local laws.
 
 ## Feedback and bug reports
 
-If you find a problem, [open a GitHub issue](https://github.com/humane125/LANtern-Control/issues)
+If you find a problem, [open a GitHub issue](https://github.com/hashin9973-ux/LANtern-Control/issues)
 and include the LANtern version, operating system and distribution, adapter
 type, capture-library version, router model, and steps needed to reproduce it.
 
