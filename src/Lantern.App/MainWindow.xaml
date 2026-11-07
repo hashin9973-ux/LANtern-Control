@@ -622,6 +622,31 @@
                                     IsEnabled="False"
                                     Visibility="Collapsed"
                                     Content="Scan devices" />
+                            <CheckBox x:Name="AutoScanCheckBox"
+                                      Margin="12,0,0,0"
+                                      VerticalAlignment="Center"
+                                      Foreground="{StaticResource PrimaryText}"
+                                      Content="Auto scan"
+                                      Click="AutoScanCheckBox_OnClick" />
+                            <TextBox x:Name="AutoScanIntervalTextBox"
+                                     Margin="7,0,0,0"
+                                     Width="52"
+                                     Height="32"
+                                     Padding="5,0"
+                                     VerticalContentAlignment="Center"
+                                     HorizontalContentAlignment="Center"
+                                     Background="{StaticResource InputBackground}"
+                                     Foreground="{StaticResource PrimaryText}"
+                                     BorderBrush="{StaticResource Border}"
+                                     BorderThickness="1"
+                                     Text="60"
+                                     MaxLength="4"
+                                     ToolTip="Automatic scan interval in seconds (60–3600)"
+                                     LostFocus="AutoScanIntervalTextBox_OnLostFocus" />
+                            <TextBlock Margin="5,0,0,0"
+                                       VerticalAlignment="Center"
+                                       Foreground="{StaticResource SecondaryText}"
+                                       Text="sec" />
                             <Button x:Name="StopButton"
                                     Style="{StaticResource DangerButtonStyle}"
                                     Click="StopButton_OnClick"
@@ -1618,7 +1643,8 @@
                                       AutoGenerateColumns="False"
                                       AlternationCount="2"
                                       CanUserSortColumns="False"
-                                      IsReadOnly="False">
+                                      IsReadOnly="False"
+                                      LoadingRow="DeviceGrid_OnLoadingRow">
                                 <DataGrid.Columns>
                                     <DataGridTemplateColumn Header="DEVICE" Width="2.2*">
                                         <DataGridTemplateColumn.CellTemplate>
@@ -1645,6 +1671,7 @@
                                                     </Border>
                                                     <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                                         <TextBox x:Name="DeviceNameEditor"
+                                                                 AutomationProperties.AutomationId="{Binding NameAutomationId}"
                                                                  Height="18"
                                                                  MinHeight="18"
                                                                  Margin="0"
@@ -1705,8 +1732,9 @@
                                                             <ColumnDefinition Width="Auto" />
                                                         </Grid.ColumnDefinitions>
                                                         <TextBox x:Name="LimitEditor"
+                                                                 AutomationProperties.AutomationId="{Binding DownloadLimitAutomationId}"
                                                                  Style="{StaticResource CompactLimitTextBoxStyle}"
-                                                                  ToolTip="0 means unlimited; live two-way monitoring remains active"
+                                                                 ToolTip="0 means unlimited; live two-way monitoring remains active"
                                                                  Text="{Binding DownloadLimit, UpdateSourceTrigger=PropertyChanged, Delay=350}" />
                                                         <Border Grid.Column="1"
                                                                 Margin="0,7"
@@ -1736,8 +1764,9 @@
                                                             <ColumnDefinition Width="Auto" />
                                                         </Grid.ColumnDefinitions>
                                                         <TextBox x:Name="LimitEditor"
+                                                                 AutomationProperties.AutomationId="{Binding UploadLimitAutomationId}"
                                                                  Style="{StaticResource CompactLimitTextBoxStyle}"
-                                                                  ToolTip="0 means unlimited; live two-way monitoring remains active"
+                                                                 ToolTip="0 means unlimited; live two-way monitoring remains active"
                                                                  Text="{Binding UploadLimit, UpdateSourceTrigger=PropertyChanged, Delay=350}" />
                                                         <Border Grid.Column="1"
                                                                 Margin="0,7"
@@ -1757,6 +1786,7 @@
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
                                                 <CheckBox Margin="14,0,0,0"
+                                                          AutomationProperties.AutomationId="{Binding PauseAutomationId}"
                                                           HorizontalAlignment="Left"
                                                           VerticalAlignment="Center"
                                                           Style="{StaticResource SwitchCheckBoxStyle}"
@@ -1822,6 +1852,95 @@
                             </Grid>
                         </Border>
                     </Grid>
+                </Border>
+                <Border x:Name="ScriptAutomationSection"
+                        Margin="0,18,12,24"
+                        Style="{StaticResource CardBorderStyle}">
+                    <StackPanel Margin="20,18">
+                        <TextBlock Text="SCRIPT AUTOMATION"
+                                   Foreground="{StaticResource SecondaryText}"
+                                   FontSize="10"
+                                   FontWeight="SemiBold" />
+                        <TextBlock Margin="0,4,0,0"
+                                   Text="Run a selected PowerShell script on a schedule"
+                                   FontSize="17"
+                                   FontWeight="Bold" />
+                        <Grid Margin="0,14,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="ScriptPathTextBox"
+                                     Height="34"
+                                     Margin="0,0,8,0"
+                                     Padding="9,0"
+                                     VerticalContentAlignment="Center"
+                                     Background="{StaticResource InputBackground}"
+                                     Foreground="{StaticResource PrimaryText}"
+                                     BorderBrush="{StaticResource Border}"
+                                     IsReadOnly="True"
+                                     ToolTip="Selected PowerShell script path"
+                                     AutomationProperties.AutomationId="script_path" />
+                            <Button x:Name="BrowseScriptButton"
+                                    Grid.Column="1"
+                                    MinHeight="34"
+                                    Margin="0,0,8,0"
+                                    Padding="13,6"
+                                    Click="BrowseScriptButton_OnClick"
+                                    Content="Browse…" />
+                            <Button x:Name="RunScriptNowButton"
+                                    Grid.Column="2"
+                                    MinHeight="34"
+                                    Margin="0,0,14,0"
+                                    Padding="13,6"
+                                    Click="RunScriptNowButton_OnClick"
+                                    Content="Run now"
+                                    IsEnabled="False" />
+                            <CheckBox x:Name="ScriptAutomationCheckBox"
+                                      Grid.Column="3"
+                                      Margin="0,0,8,0"
+                                      VerticalAlignment="Center"
+                                      Foreground="{StaticResource PrimaryText}"
+                                      Content="Run every"
+                                      Click="ScriptAutomationCheckBox_OnClick"
+                                      AutomationProperties.AutomationId="script_schedule_enabled" />
+                            <TextBox x:Name="ScriptAutomationIntervalTextBox"
+                                     Grid.Column="4"
+                                     Width="58"
+                                     Height="32"
+                                     Margin="0,0,5,0"
+                                     Padding="5,0"
+                                     VerticalContentAlignment="Center"
+                                     HorizontalContentAlignment="Center"
+                                     Background="{StaticResource InputBackground}"
+                                     Foreground="{StaticResource PrimaryText}"
+                                     BorderBrush="{StaticResource Border}"
+                                     BorderThickness="1"
+                                     Text="60"
+                                     MaxLength="4"
+                                     ToolTip="Script interval in seconds (60–3600)"
+                                     LostFocus="ScriptAutomationIntervalTextBox_OnLostFocus"
+                                     AutomationProperties.AutomationId="script_schedule_interval" />
+                            <TextBlock Grid.Column="5"
+                                       VerticalAlignment="Center"
+                                       Foreground="{StaticResource SecondaryText}"
+                                       Text="sec" />
+                        </Grid>
+                        <TextBlock x:Name="ScriptAutomationStatusText"
+                                   Margin="0,12,0,0"
+                                   Text="No script selected. Scheduled execution is disabled."
+                                   Foreground="{StaticResource SecondaryText}"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Margin="0,6,0,0"
+                                   Text="Scripts run only while LANtern is open, with LANtern’s Windows permissions. Choose scripts you have inspected and trust."
+                                   Foreground="{StaticResource SecondaryText}"
+                                   FontSize="11"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
                 </Border>
             </StackPanel>
         </ScrollViewer>

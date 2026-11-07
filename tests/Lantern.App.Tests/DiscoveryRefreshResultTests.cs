@@ -18,7 +18,8 @@ public sealed class DiscoveryRefreshResultTests
 
         Assert.Equal(
             "Device inventory refreshed — 3 neighbor-cache entries, 7 known devices. " +
-            "ARP replies received from 6 of 252 candidate addresses after 498 paced requests (246 retries).",
+            "ARP replies received from 6 of 252 candidate addresses after 498 paced requests " +
+            "(maximum 100 ARP requests per second) (246 retries).",
             result.StatusMessage);
     }
 
@@ -28,7 +29,7 @@ public sealed class DiscoveryRefreshResultTests
         var result = new DiscoveryRefreshResult(3, 4);
 
         Assert.Equal(
-            "Device inventory refreshed — 3 neighbor-cache entries, 4 known devices. No discovery requests were sent; manual discovery is limited to one pass per minute.",
+            "Device inventory refreshed — 3 neighbor-cache entries, 4 known devices. No discovery requests were sent; local-network discovery is limited to one pass per minute.",
             result.StatusMessage);
     }
 

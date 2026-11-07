@@ -242,9 +242,12 @@ public sealed class DeviceProbePolicyTests
     }
 
     [Fact]
-    public void DiscoveryRetrySpacing_IsPaced()
+    public void DiscoveryArpRequestSpacing_IsPacedForFastBoundedBursts()
     {
-        Assert.Equal(TimeSpan.FromMilliseconds(150), DeviceProbePolicy.DiscoveryRetrySpacing);
+        Assert.Equal(TimeSpan.FromMilliseconds(10), DeviceProbePolicy.DiscoveryRequestSpacing);
+        Assert.Equal(TimeSpan.FromMilliseconds(10), DeviceProbePolicy.DiscoveryRetrySpacing);
+        Assert.Equal(TimeSpan.FromSeconds(60), DeviceProbePolicy.DiscoveryInterval);
+        Assert.Equal(253, DeviceProbePolicy.MaxDiscoveryTargetsPerScan);
     }
 
 

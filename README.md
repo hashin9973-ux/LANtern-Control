@@ -4,7 +4,7 @@
 
 # LANtern Control — Open-Source SelfishNet Alternative for Windows and Linux
 
-<a href="https://github.com/hashin9973-ux/LANtern-Control/releases/latest"><img alt="Release v0.1.8" src="https://img.shields.io/badge/release-v0.1.8-C51B3A?style=flat-square"></a>
+<a href="https://github.com/hashin9973-ux/LANtern-Control/releases/latest"><img alt="Release v0.1.9" src="https://img.shields.io/badge/release-v0.1.9-C51B3A?style=flat-square"></a>
 <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-C51B3A?style=flat-square"></a>
 <img alt="C#" src="https://img.shields.io/badge/language-C%23-239120?style=flat-square&amp;logo=csharp">
 <img alt=".NET 8" src="https://img.shields.io/badge/.NET-8.0-512BD4?style=flat-square&amp;logo=dotnet">
@@ -23,7 +23,7 @@ alternative with a modern desktop interface, LANtern Control is built for that
 use case.
 
 > [!IMPORTANT]
-> Windows `v0.1.8` is the current release. Linux `v0.1.0` is available as a
+> Windows `v0.1.9` is the current release. Linux `v0.1.0` is available as a
 > public beta AppImage. **macOS remains a work in progress (WIP).**
 
 ## Features
@@ -35,6 +35,8 @@ use case.
 - Keep a ten-minute network activity chart with 2.5-second samples.
 - Apply independent download and upload limits in `KB/s`.
 - Pause and restore a device's IPv4 internet connection.
+- Assign stable, MAC-based UI Automation IDs to device rows and controls.
+- Optionally run a selected PowerShell script on a configurable schedule while the Windows app is open.
 - Observe domains through DNS queries, TLS server names, and plain HTTP host
   headers without decrypting private HTTPS content.
 - Block domains for individual devices, including presets for common services.
@@ -97,7 +99,7 @@ Download the latest version from [GitHub Releases](https://github.com/hashin9973
 
 ### Windows installer
 
-1. Download `LANtern-Control-Setup-v0.1.8.msi`.
+1. Download `LANtern-Control-Setup-v0.1.9.msi`.
 2. Run the setup program.
 3. Choose the installation folder and whether to create Start Menu or desktop
    shortcuts.
@@ -105,7 +107,7 @@ Download the latest version from [GitHub Releases](https://github.com/hashin9973
 
 ### Windows portable version
 
-1. Download `LANtern-Control-v0.1.8-win-x64.zip`.
+1. Download `LANtern-Control-v0.1.9-win-x64.zip`.
 2. Extract the complete archive to a folder where it can remain.
 3. Run `LANtern Control.exe` as Administrator from that folder. Keep the
    extracted files together; no application installation is required.
@@ -145,16 +147,19 @@ disconnecting the selected adapter, suspending, or rebooting.
    network you want to manage.
 3. Click **Scan devices** to read the neighbor cache and saved device history,
    then discover responsive hosts on the selected local IPv4 segment using ARP,
-   ICMP, common TCP services, NetBIOS and mDNS. Live IPs without a verified MAC
-   remain visible as inventory-only entries.
+   UPnP/SSDP, DNS-SD/mDNS service discovery, ICMP, common TCP services, NetBIOS
+   and reverse mDNS. Live IPs without a verified MAC remain visible as
+   inventory-only entries. Select **Auto scan** and set an interval from
+   60 to 3600 seconds to refresh the device list periodically while the app is open.
 4. Click **Start control** to enable the selected device rules and live capture.
 5. Enter a download or upload limit in `KB/s`. A value of `0` means unlimited.
 6. Use the **Internet** switch to pause or restore a device's connection.
-7. Open **Visited domains** to inspect the destination domains LANtern can
+7. In **Script automation**, choose a `.ps1` file, use **Run now** to test it, or explicitly enable a 60–3600 second schedule. The schedule stops when LANtern closes and skips overlapping runs.
+8. Open **Visited domains** to inspect the destination domains LANtern can
    observe for each device.
-8. Add individual domain rules or use a service preset to block domains for a
+9. Add individual domain rules or use a service preset to block domains for a
    selected device.
-9. Click **Stop & restore** before changing adapters, leaving the network, or
+10. Click **Stop & restore** before changing adapters, leaving the network, or
    shutting down the controller computer.
 
 Settings, saved device identities, and rules are stored locally in:
@@ -174,23 +179,34 @@ change the router configuration.
 ## Device discovery and identity conflicts
 
 **Scan devices** reads the selected adapter's OS neighbor cache and merges
-saved device identities. The ARP/cache pass runs first, with one
-request per candidate at 200 ms intervals and one 150 ms retry for addresses
-that did not reply. Controller and gateway addresses are excluded. Candidate
-discovery is limited to the selected local IPv4 segment (capped to a /24 on
-larger networks) and at most 253 addresses.
+saved device identities. The ARP/cache pass runs first, with one request per
+candidate at 10 ms intervals (up to 100 ARP requests per second) and one 10 ms
+retry for addresses that did not reply. Controller and gateway addresses are
+excluded. Candidate discovery is limited to the selected local IPv4 segment
+(capped to a /24 on larger networks) and at most 253 addresses. A /24 normally
+has 252 candidates after excluding the controller and gateway.
 
 Only addresses without recent reachability evidence receive supplemental
-protocol checks. For each such address, LANtern tries one ICMP echo, then at
-most two TCP connection attempts (ports 443 and 80), followed by at most one
-NetBIOS node-status query and one mDNS reverse-lookup query. It stops probing
-that address after the first positive response. Supplemental probe starts are
-globally spaced by at least 50 ms, with at most eight hosts checked
-concurrently and no more than five supplemental probes per unconfirmed
-address. The supplemental pass has a separate one-minute cooldown per
-adapter. Both passes run only after the user presses **Scan devices**; no
-whole-subnet discovery pass is added to background monitoring. Background
-presence checks remain limited to remembered device addresses.
+discovery. Before probing individual addresses, LANtern sends at most one
+UPnP/SSDP root-device search and one DNS-SD/mDNS service-type enumeration query
+on the selected adapter. Replies are accepted only from unconfirmed addresses
+inside the selected local IPv4 segment. An address found through either
+multicast query is removed from the direct-probe list.
+
+For each remaining address, LANtern tries one ICMP echo, then at most two TCP
+connection attempts (ports 443 and 80), followed by at most one NetBIOS
+node-status query and one mDNS reverse-lookup query. It stops probing that
+address after the first positive response. The two link-local multicast
+queries each have a response window of up to 1.4 seconds. Multicast and direct
+probe starts share a global spacing of at least 5 ms (no more than 200 starts
+per second); no more than 64 individual hosts are checked concurrently, and
+no more than five direct fallback probes are sent to any remaining
+unconfirmed address. The supplemental pass has a separate one-minute cooldown
+per adapter. **Auto scan** is optional and disabled by default; when enabled,
+it repeats the full discovery process at the configured interval (60–3600
+seconds) while LANtern remains open. Background presence checks remain a
+separate low-rate task limited to remembered device addresses. Periodic
+full scans do not change interception rules or expand the poisoning loop.
 
 Only explicit positive protocol responses count as live hosts; a TCP timeout
 or cached neighbor entry is not treated as proof of current reachability.
@@ -241,6 +257,29 @@ forwarded-traffic rates may not be available for devices that have no explicit
 control rule; use router/AP telemetry or a managed-switch mirror port for
 non-intrusive whole-network traffic monitoring.
 
+## Script automation and UI Automation
+
+The Windows app can run one user-selected PowerShell `.ps1` file manually or
+on a 60–3600 second schedule. Scheduled execution is disabled by default,
+requires explicit confirmation, runs only while LANtern is open, and stops
+when the app closes. A running script is limited to two minutes; a new run is
+skipped while a previous run is still active. The selected script
+path, enabled state, and interval are saved in LANtern's local settings file.
+Closing LANtern stops the schedule; it does not register a Windows Task
+Scheduler job.
+
+Scripts run as the same Windows account and with the same permissions as
+LANtern. When LANtern is elevated, child scripts inherit that elevated token.
+Only select scripts you have inspected and trust. LANtern does not bypass the
+Windows PowerShell execution policy.
+
+Device rows and their controls expose stable UI Automation IDs derived from
+the MAC address, not the current row number or display name. For example,
+`device_E261190DBD54`, `pause_E261190DBD54`,
+`download_limit_E261190DBD54`, and `upload_limit_E261190DBD54`.
+Inventory-only rows without a verified MAC use an IP-based row ID and cannot
+be controlled.
+
 ## Domain visibility and blocking
 
 LANtern can identify many destination domains, but it does not decrypt HTTPS,
@@ -285,7 +324,7 @@ enable WinPcap API-compatible mode if offered, and restart LANtern Control.
 - Make sure the controller and devices are on the same normal LAN, not an
   isolated guest network.
 - Run LANtern Control as Administrator.
-- Click **Scan devices** to run ICMP, TCP, NetBIOS and mDNS checks alongside ARP discovery. Review the per-protocol counts. A host that filters all of these protocols may still require router/AP client or DHCP lease inventory.
+- Click **Scan devices** to run UPnP/SSDP, DNS-SD/mDNS, ICMP, TCP and NetBIOS checks alongside ARP discovery. Review the per-protocol counts. A host that does not advertise a supported service or filters all checked protocols may still require router/AP client or DHCP lease inventory.
 
 ### A device loses connectivity
 
