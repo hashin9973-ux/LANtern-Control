@@ -12,6 +12,8 @@ public static class DeviceProbePolicy
 {
     public static TimeSpan ProbeInterval { get; } = TimeSpan.FromSeconds(60);
 
+    public const int MaxTargetsPerBatch = 100;
+
     public static TimeSpan MinimumTimeBetweenProbes { get; } = TimeSpan.FromSeconds(60);
 
     public static TimeSpan MinimumAgeBeforeProbe { get; } = TimeSpan.FromSeconds(45);
@@ -47,9 +49,15 @@ public static class DeviceProbePolicy
                 force ||
                 device.LastSeen == DateTimeOffset.MinValue ||
                 (now >= device.LastSeen && now - device.LastSeen >= MinimumAgeBeforeProbe))
+            .DistinctBy(device => device.IpAddress)
+            .OrderBy(device =>
+                lastProbeAt is not null &&
+                lastProbeAt.TryGetValue(device.IpAddress, out var previousProbe)
+                    ? previousProbe
+                    : DateTimeOffset.MinValue)
+            .ThenBy(device => ToUInt32(device.IpAddress))
+            .Take(MaxTargetsPerBatch)
             .Select(device => device.IpAddress)
-            .Distinct()
-            .OrderBy(ToUInt32)
             .ToArray();
     }
 
