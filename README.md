@@ -4,7 +4,7 @@
 
 # LANtern Control — Open-Source SelfishNet Alternative for Windows and Linux
 
-<a href="https://github.com/humane125/LANtern-Control/releases/latest"><img alt="Release v0.1.3" src="https://img.shields.io/badge/release-v0.1.3-C51B3A?style=flat-square"></a>
+<a href="https://github.com/humane125/LANtern-Control/releases/latest"><img alt="Release v0.1.3" src="https://img.shields.io/badge/release-v0.1.4-C51B3A?style=flat-square"></a>
 <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-C51B3A?style=flat-square"></a>
 <img alt="C#" src="https://img.shields.io/badge/language-C%23-239120?style=flat-square&amp;logo=csharp">
 <img alt=".NET 8" src="https://img.shields.io/badge/.NET-8.0-512BD4?style=flat-square&amp;logo=dotnet">
@@ -23,7 +23,7 @@ alternative with a modern desktop interface, LANtern Control is built for that
 use case.
 
 > [!IMPORTANT]
-> Windows `v0.1.3` is the stable release. Linux `v0.1.0` is available as a
+> Windows `v0.1.4` is the current release. Linux `v0.1.0` is available as a
 > public beta AppImage. **macOS remains a work in progress (WIP).**
 
 ## Features
@@ -97,7 +97,7 @@ Download the latest version from [GitHub Releases](https://github.com/humane125/
 
 ### Windows installer
 
-1. Download `LANtern-Control-Setup-v0.1.3.msi`.
+1. Download `LANtern-Control-Setup-v0.1.4.msi`.
 2. Run the setup program.
 3. Choose the installation folder and whether to create Start Menu or desktop
    shortcuts.
@@ -105,7 +105,7 @@ Download the latest version from [GitHub Releases](https://github.com/humane125/
 
 ### Windows portable version
 
-1. Download `LANtern-Control-v0.1.3-win-x64.zip`.
+1. Download `LANtern-Control-v0.1.4-win-x64.zip`.
 2. Extract the complete archive to a folder where it can remain.
 3. Run `LANtern Control.exe` as Administrator from that folder. Keep the
    extracted files together; no application installation is required.
@@ -249,7 +249,7 @@ enable WinPcap API-compatible mode if offered, and restart LANtern Control.
 - Make sure the controller and devices are on the same normal LAN, not an
   isolated guest network.
 - Run LANtern Control as Administrator.
-- Click **Refresh devices** and allow the discovery scan to finish.
+- Click **Scan devices** to refresh the passive device inventory.
 
 ### A device loses connectivity
 
