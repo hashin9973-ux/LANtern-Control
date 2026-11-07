@@ -154,12 +154,12 @@ disconnecting the selected adapter, suspending, or rebooting.
 4. Click **Start control** to enable the selected device rules and live capture.
 5. Enter a download or upload limit in `KB/s`. A value of `0` means unlimited.
 6. Use the **Internet** switch to pause or restore a device's connection.
-7. In **Script automation**, choose a `.ps1` file, use **Run now** to test it, or explicitly enable a 60–3600 second schedule. The schedule stops when LANtern closes and never starts overlapping copies.
-7. Open **Visited domains** to inspect the destination domains LANtern can
+7. In **Script automation**, choose a `.ps1` file, use **Run now** to test it, or explicitly enable a 60–3600 second schedule. The schedule stops when LANtern closes and skips overlapping runs.
+8. Open **Visited domains** to inspect the destination domains LANtern can
    observe for each device.
-8. Add individual domain rules or use a service preset to block domains for a
+9. Add individual domain rules or use a service preset to block domains for a
    selected device.
-9. Click **Stop & restore** before changing adapters, leaving the network, or
+10. Click **Stop & restore** before changing adapters, leaving the network, or
    shutting down the controller computer.
 
 Settings, saved device identities, and rules are stored locally in:
