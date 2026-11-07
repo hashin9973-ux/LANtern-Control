@@ -567,4 +567,31 @@ public sealed class DeviceViewModelTests
                (0.7152 * Channel(color.G)) +
                (0.0722 * Channel(color.B));
     }
+
+    [Fact]
+    public void ClearDeviceCache_RemovesVisibleOfflineRowsButRetainsSavedIdentityHistory()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            GetProjectRoot(),
+            "src",
+            "Lantern.App",
+            "MainWindow.xaml.cs"));
+        var start = source.IndexOf(
+            "private async void ClearDeviceCacheButton_OnClick",
+            StringComparison.Ordinal);
+        var end = source.IndexOf(
+            "private void ClearActivityButton_OnClick",
+            start,
+            StringComparison.Ordinal);
+
+        Assert.True(start >= 0 && end > start, "Could not locate the Windows cache-clear handler.");
+        var handler = source[start..end];
+
+        Assert.Contains("engine.ForgetDevice(macAddress)", handler, StringComparison.Ordinal);
+        Assert.Contains("registry.Remove(macAddress)", handler, StringComparison.Ordinal);
+        Assert.Contains("Devices.Remove(device)", handler, StringComparison.Ordinal);
+        Assert.DoesNotContain("LastKnownIp = null", handler, StringComparison.Ordinal);
+        Assert.DoesNotContain("LastSeenUtc = null", handler, StringComparison.Ordinal);
+    }
+
 }
