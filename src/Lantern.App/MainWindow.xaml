@@ -30,6 +30,7 @@
         <StreamGeometry x:Key="IconUpload">M10,18 V6 M5,10 L10,5 L15,10 M3,2 H17</StreamGeometry>
         <StreamGeometry x:Key="IconRules">M3,5 H17 M3,10 H17 M3,15 H17</StreamGeometry>
         <StreamGeometry x:Key="IconShield">M10,1 L18,4 V9 C18,14 14.7,18 10,20 C5.3,18 2,14 2,9 V4 Z M7,10 L9,12 L14,7</StreamGeometry>
+        <StreamGeometry x:Key="IconScript">M5,2 H13 L18,7 V18 H5 Z M13,2 V7 H18 M8,11 H14 M8,14 H14</StreamGeometry>
         <Style x:Key="WindowCaptionButtonStyle" TargetType="Button">
             <Setter Property="Width" Value="46" />
             <Setter Property="Height" Value="38" />
@@ -423,6 +424,10 @@
                                                              Value="Visible">
                                                     <Setter Property="Fill" Value="{StaticResource SecondaryText}" />
                                                 </DataTrigger>
+                                                <DataTrigger Binding="{Binding Visibility, ElementName=ScriptAutomationSection}"
+                                                             Value="Visible">
+                                                    <Setter Property="Fill" Value="{StaticResource SecondaryText}" />
+                                                </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
                                     </Path.Style>
@@ -492,6 +497,39 @@
                                 </Path>
                             </Grid>
                             <TextBlock Text="Domain rules" />
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="ScriptAutomationNavButton"
+                            Style="{StaticResource NavButtonStyle}"
+                            Tag="ScriptAutomationSection"
+                            Click="NavigationButton_OnClick"
+                            AutomationProperties.AutomationId="nav_script_automation">
+                        <StackPanel Orientation="Horizontal">
+                            <Grid Width="25" Height="20">
+                                <Path Width="16"
+                                      Height="18"
+                                      HorizontalAlignment="Left"
+                                      VerticalAlignment="Center"
+                                      Data="{StaticResource IconScript}"
+                                      StrokeThickness="1.6"
+                                      StrokeStartLineCap="Round"
+                                      StrokeEndLineCap="Round"
+                                      StrokeLineJoin="Round"
+                                      Stretch="Uniform">
+                                    <Path.Style>
+                                        <Style TargetType="Path">
+                                            <Setter Property="Stroke" Value="{StaticResource SecondaryText}" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Visibility, ElementName=ScriptAutomationSection}"
+                                                             Value="Visible">
+                                                    <Setter Property="Stroke" Value="{StaticResource Accent}" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Path.Style>
+                                </Path>
+                            </Grid>
+                            <TextBlock Text="Script automation" />
                         </StackPanel>
                     </Button>
                 </StackPanel>
@@ -1692,18 +1730,18 @@
                                                                      VerticalContentAlignment="Center"
                                                                      Text="{Binding EditableName, UpdateSourceTrigger=PropertyChanged, Delay=350}"
                                                                      ToolTip="Click to rename this device" />
-                                                            <Button x:Name="CopyAutomationIdsButton"
+                                                            <Button x:Name="CopyAutomationScriptButton"
                                                                     Grid.Column="1"
                                                                     MinHeight="22"
                                                                     Margin="8,0,0,0"
                                                                     Padding="8,2"
                                                                     FontSize="10"
                                                                     Tag="{Binding}"
-                                                                    AutomationProperties.AutomationId="{Binding CopyAutomationIdsButtonAutomationId}"
-                                                                    AutomationProperties.Name="Copy device Automation IDs"
-                                                                    Click="CopyAutomationIdsButton_OnClick"
-                                                                    Content="Copy IDs"
-                                                                    ToolTip="Copy this device's row, name, download, upload, and pause Automation IDs" />
+                                                                    AutomationProperties.AutomationId="{Binding CopyAutomationScriptButtonAutomationId}"
+                                                                    AutomationProperties.Name="Copy device PowerShell automation script"
+                                                                    Click="CopyAutomationScriptButton_OnClick"
+                                                                    Content="Copy script"
+                                                                    ToolTip="Copy a complete PowerShell UI Automation starter script for this device" />
                                                         </Grid>
                                                         <StackPanel x:Name="DeviceMetadata"
                                                                     Margin="0"
@@ -1874,7 +1912,8 @@
                 </Border>
                 <Border x:Name="ScriptAutomationSection"
                         Margin="0,18,12,24"
-                        Style="{StaticResource CardBorderStyle}">
+                        Style="{StaticResource CardBorderStyle}"
+                        Visibility="Collapsed">
                     <StackPanel Margin="20,18">
                         <TextBlock Text="SCRIPT AUTOMATION"
                                    Foreground="{StaticResource SecondaryText}"
