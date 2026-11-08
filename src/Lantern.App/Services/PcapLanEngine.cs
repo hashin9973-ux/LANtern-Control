@@ -203,12 +203,24 @@ public sealed class PcapLanEngine : IAsyncDisposable
         }
     }
 
-    public Task<DiscoveryRefreshResult> RefreshNeighborsAsync(
+    public async Task<DiscoveryRefreshResult> RefreshNeighborsAsync(
         CancellationToken cancellationToken = default)
     {
         var activeProfile = profile ??
             throw new InvalidOperationException("Select an adapter before scanning devices.");
-        return ScanDevicesAsync(activeProfile, cancellationToken);
+        await refreshSync.WaitAsync(cancellationToken);
+        try
+        {
+            SeedRememberedInventory();
+            var cachedEntries = await RefreshWindowsNeighborCacheAsync(
+                activeProfile,
+                cancellationToken);
+            return new DiscoveryRefreshResult(cachedEntries, registry.Peek().Count);
+        }
+        finally
+        {
+            refreshSync.Release();
+        }
     }
 
     public async Task<DiscoveryRefreshResult> ScanDevicesAsync(
