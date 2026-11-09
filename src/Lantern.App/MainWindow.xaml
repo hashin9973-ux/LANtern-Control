@@ -1900,10 +1900,18 @@
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
-                                <TextBlock x:Name="DetailStatusText"
-                                           Text="Ready. No router login is required."
-                                           Foreground="{StaticResource SecondaryText}"
-                                           TextWrapping="Wrap" />
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock x:Name="DetailStatusText"
+                                               Text="Ready. No router login is required."
+                                               Foreground="{StaticResource SecondaryText}"
+                                               TextWrapping="Wrap" />
+                                    <TextBlock x:Name="PacketHealthText"
+                                               Margin="0,5,0,0"
+                                               FontSize="10"
+                                               Foreground="{StaticResource SecondaryText}"
+                                               Text="Packet health: idle"
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
                                 <TextBlock x:Name="UptimeText"
                                            Grid.Column="1"
                                            Margin="16,0,0,0"
