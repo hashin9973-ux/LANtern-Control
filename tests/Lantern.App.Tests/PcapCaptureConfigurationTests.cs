@@ -16,13 +16,15 @@ public sealed class PcapCaptureConfigurationTests
     }
 
     [Fact]
-    public void CreateForForwarding_UsesImmediatePacketDelivery()
+    public void CreateForForwarding_UsesBufferedPacketDelivery()
     {
         var configuration = PcapCaptureConfiguration.CreateForForwarding();
 
         Assert.Equal(DeviceModes.None, configuration.Mode);
-        Assert.True(configuration.Immediate);
-        Assert.InRange(configuration.ReadTimeout, 0, 1);
-        Assert.Equal(0, configuration.MinToCopy);
+        Assert.False(configuration.Immediate);
+        Assert.Equal(100, configuration.ReadTimeout);
+        Assert.Equal(8 * 1024 * 1024, configuration.BufferSize);
+        Assert.Equal(8 * 1024 * 1024, configuration.KernelBufferSize);
+        Assert.Null(configuration.MinToCopy);
     }
 }

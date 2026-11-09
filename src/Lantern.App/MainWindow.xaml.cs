@@ -330,7 +330,7 @@ public partial class MainWindow : Window
             settingsDirty = false;
             ConfigureAutoScanTimer();
             DetailStatusText.Text = enabled
-                ? $"Automatic device discovery enabled: a full scan runs every {settings.AutoScanIntervalSeconds} seconds."
+                ? $"Automatic inventory refresh enabled: the Windows neighbor cache is refreshed every {settings.AutoScanIntervalSeconds} seconds."
                 : "Automatic device discovery disabled.";
         }
         catch (IOException exception)
@@ -372,7 +372,7 @@ public partial class MainWindow : Window
             if (settings.AutoScanEnabled)
             {
                 DetailStatusText.Text =
-                    $"Automatic device discovery will run every {settings.AutoScanIntervalSeconds} seconds.";
+                    $"Automatic inventory refresh will run every {settings.AutoScanIntervalSeconds} seconds.";
             }
         }
         catch (IOException exception)
@@ -928,51 +928,61 @@ public partial class MainWindow : Window
             var scanStartedAt = DateTimeOffset.UtcNow;
             SetStatus(
                 isAutomatic
-                    ? $"Automatic device discovery running (every {settings.AutoScanIntervalSeconds} seconds)…"
+                    ? $"Automatic inventory refresh running (every {settings.AutoScanIntervalSeconds} seconds)…"
                     : "Refreshing the neighbor cache and performing fast, paced ARP discovery first…",
                 null);
 
             DiscoveryRefreshResult arpResult;
             string? arpFailure = null;
-            try
-            {
-                // ARP gets first chance to identify hosts. Supplemental protocol
-                // probes run only after this bounded, faster pass has completed.
-                arpResult = await engine.ScanDevicesAsync(adapter);
-            }
-            catch (Exception exception)
-            {
-                arpFailure = exception.Message;
-                arpResult = new DiscoveryRefreshResult(
-                    0,
-                    registry.Peek().Count,
-                    ProbeWarning: exception.Message);
-            }
-
-            var observationTime = DateTimeOffset.UtcNow;
-            var recentlyObservedAddresses = registry.Peek()
-                .Where(snapshot =>
-                    DevicePresencePolicy.Classify(snapshot.LastSeen, observationTime) ==
-                    DevicePresence.Online)
-                .Select(snapshot => snapshot.IpAddress)
-                .ToHashSet();
-
-            SetStatus(
-                "Checking only addresses without recent reachability evidence using faster paced protocol fallbacks…",
-                null);
-
-            LocalHostDiscoveryResult hostResult;
+            LocalHostDiscoveryResult hostResult = new([], 0);
             string? hostFailure = null;
-            try
+
+            if (isAutomatic)
             {
-                hostResult = await localHostDiscoveryService.ScanAsync(
-                    adapter,
-                    recentlyObservedAddresses);
+                // The engine already performs paced presence probes while controlling.
+                // A periodic full-subnet scan competes with packet forwarding and can
+                // create avoidable CPU/network load. Automatic refresh is inventory-only.
+                arpResult = await engine.RefreshNeighborsAsync();
             }
-            catch (Exception exception)
+            else
             {
-                hostFailure = exception.Message;
-                hostResult = new LocalHostDiscoveryResult([], 0);
+                // Explicit manual scans may perform the full discovery pass.
+                try
+                {
+                    arpResult = await engine.ScanDevicesAsync(adapter);
+                }
+                catch (Exception exception)
+                {
+                    arpFailure = exception.Message;
+                    arpResult = new DiscoveryRefreshResult(
+                        0,
+                        registry.Peek().Count,
+                        ProbeWarning: exception.Message);
+                }
+
+                var observationTime = DateTimeOffset.UtcNow;
+                var recentlyObservedAddresses = registry.Peek()
+                    .Where(snapshot =>
+                        DevicePresencePolicy.Classify(snapshot.LastSeen, observationTime) ==
+                        DevicePresence.Online)
+                    .Select(snapshot => snapshot.IpAddress)
+                    .ToHashSet();
+
+                SetStatus(
+                    "Checking only addresses without recent reachability evidence using faster paced protocol fallbacks…",
+                    null);
+
+                try
+                {
+                    hostResult = await localHostDiscoveryService.ScanAsync(
+                        adapter,
+                        recentlyObservedAddresses);
+                }
+                catch (Exception exception)
+                {
+                    hostFailure = exception.Message;
+                    hostResult = new LocalHostDiscoveryResult([], 0);
+                }
             }
 
             var liveMacByIp = registry.Peek()
@@ -1030,7 +1040,7 @@ public partial class MainWindow : Window
 
             if (isAutomatic)
             {
-                status = $"Automatic scan completed ({settings.AutoScanIntervalSeconds}-second interval). {status}";
+                status = $"Automatic inventory refresh completed ({settings.AutoScanIntervalSeconds}-second interval). {status}";
             }
 
             DetailStatusText.Text = status;
@@ -1730,6 +1740,7 @@ public partial class MainWindow : Window
         SyncWebsiteActivityGroups();
         SyncDomainRuleDevices();
         RefreshDashboardSummary();
+        RefreshEngineHealthDisplay();
         EmptyState.Visibility = Devices.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         DeviceCountText.Text = $"{Devices.Count} device{(Devices.Count == 1 ? string.Empty : "s")}";
     }
@@ -1847,19 +1858,22 @@ public partial class MainWindow : Window
     {
         _ = Dispatcher.InvokeAsync(() =>
         {
-            ApplyEngineState(eventArgs.IsRunning);
+            ApplyEngineState(eventArgs.IsRunning, eventArgs.IsHealthy);
             DetailStatusText.Text = eventArgs.StatusMessage;
+            RefreshEngineHealthDisplay();
         });
     }
 
-    private void ApplyEngineState(bool isRunning)
+    private void ApplyEngineState(bool isRunning, bool isHealthy)
     {
         if (isRunning)
         {
             controlStartedAt ??= DateTimeOffset.UtcNow;
             refreshTimer.Start();
-            TopStatusText.Text = "Active";
-            StatusDot.Fill = new SolidColorBrush(Color.FromRgb(104, 192, 138));
+            TopStatusText.Text = isHealthy ? "Active" : "Degraded";
+            StatusDot.Fill = isHealthy
+                ? new SolidColorBrush(Color.FromRgb(104, 192, 138))
+                : new SolidColorBrush(Color.FromRgb(231, 164, 72));
         }
         else
         {
@@ -1871,7 +1885,69 @@ public partial class MainWindow : Window
         }
 
         UpdateButtons();
+        RefreshEngineHealthDisplay();
         RefreshDashboardSummary(addTrafficSample: false);
+    }
+
+    private void RefreshEngineHealthDisplay()
+    {
+        var snapshot = engine.GetHealthSnapshot();
+        if (!snapshot.IsRunning)
+        {
+            PacketHealthText.Text = "Packet health: idle";
+            return;
+        }
+
+        TopStatusText.Text = snapshot.IsHealthy ? "Active" : "Degraded";
+        StatusDot.Fill = snapshot.IsHealthy
+            ? new SolidColorBrush(Color.FromRgb(104, 192, 138))
+            : new SolidColorBrush(Color.FromRgb(231, 164, 72));
+
+        var nativeName = string.IsNullOrWhiteSpace(snapshot.NativeLibraryPath)
+            ? "native DLL path unavailable"
+            : Path.GetFileName(snapshot.NativeLibraryPath);
+        var queueBytes =
+            $"queues capture {snapshot.CaptureQueueBytes / 1024:N0}, " +
+            $"forward {snapshot.ForwardingInjectionQueueBytes / 1024:N0}, " +
+            $"ARP {snapshot.PriorityInjectionQueueBytes / 1024:N0} KiB";
+        var health = snapshot.IsHealthy ? "healthy" : "degraded";
+        var captureAge = snapshot.LastCaptureAtUtc is { } captureAt
+            ? $"{(DateTimeOffset.UtcNow - captureAt).TotalSeconds:N1}s ago"
+            : "no packets observed";
+        var arpAge = snapshot.LastArpInjectionAtUtc is { } arpAt
+            ? $"{(DateTimeOffset.UtcNow - arpAt).TotalSeconds:N1}s ago"
+            : "not sent yet";
+
+        PacketHealthText.Text =
+            $"{health} · {snapshot.CaptureLibraryVersion} · {nativeName} · " +
+            $"capture {snapshot.CapturePacketsPerSecond:N0} pkt/s " +
+            $"{snapshot.CaptureBytesPerSecond / 1024:N0} KiB/s · " +
+            $"forward {snapshot.ForwardedPacketsPerSecond:N0} pkt/s " +
+            $"{snapshot.ForwardedBytesPerSecond / 1024:N0} KiB/s · " +
+            $"CPU {snapshot.ProcessCpuPercent:N1}% · " +
+            $"drops kernel {snapshot.CaptureKernelDroppedPackets:N0}, queue " +
+            $"{snapshot.CaptureQueueDroppedPackets + snapshot.InjectionQueueDroppedPackets:N0} · " +
+            $"send errors {snapshot.InjectionSendFailures:N0}, retries " +
+            $"{snapshot.InjectionRetryAttempts:N0} · " +
+            $"ARP queue wait {snapshot.LastArpQueueLatencyMilliseconds:N1} ms, " +
+            $"forward queue wait {snapshot.LastForwardingQueueLatencyMilliseconds:N1} ms · " +
+            $"{queueBytes} · capture {captureAge} · ARP send {arpAge}";
+
+        if (!string.IsNullOrWhiteSpace(snapshot.NativeLibraryError) ||
+            !string.IsNullOrWhiteSpace(snapshot.CaptureStatisticsWarning))
+        {
+            var diagnostic = snapshot.CaptureStatisticsWarning ??
+                             snapshot.NativeLibraryError;
+            PacketHealthText.ToolTip = diagnostic;
+        }
+        else
+        {
+            PacketHealthText.ToolTip =
+                $"SharpPcap {snapshot.SharpPcapVersion}; " +
+                $"native DLL {snapshot.NativeLibraryPath ?? "unverified"} " +
+                $"({snapshot.NativeLibraryFileVersion ?? "version unavailable"}). " +
+                $"Last forwarded injection: {snapshot.LastForwardedInjectionAtUtc?.ToString("O") ?? "not yet"}";
+        }
     }
 
     private void Engine_OnDeviceIdentityLearned(

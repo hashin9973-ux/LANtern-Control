@@ -37,4 +37,45 @@ public sealed class ForwardingShutdownTests
 
         Assert.False(forwarding);
     }
+    [Fact]
+    public async Task RunAsync_StillAwaitsWorkersWhenCancellationFails()
+    {
+        var workersAwaited = false;
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => ForwardingShutdown.RunAsync(
+                () => Task.CompletedTask,
+                () => throw new InvalidOperationException("cancel failed"),
+                () =>
+                {
+                    workersAwaited = true;
+                    return Task.CompletedTask;
+                }));
+
+        Assert.Equal("cancel failed", exception.Message);
+        Assert.True(workersAwaited);
+    }
+
+    [Fact]
+    public async Task RunAsync_AggregatesFailuresAfterAwaitingWorkers()
+    {
+        var workersAwaited = false;
+
+        var exception = await Assert.ThrowsAsync<AggregateException>(
+            () => ForwardingShutdown.RunAsync(
+                () => throw new IOException("restore failed"),
+                () => throw new InvalidOperationException("cancel failed"),
+                () =>
+                {
+                    workersAwaited = true;
+                    return Task.CompletedTask;
+                }));
+
+        Assert.True(workersAwaited);
+        Assert.Collection(
+            exception.InnerExceptions,
+            failure => Assert.IsType<IOException>(failure),
+            failure => Assert.IsType<InvalidOperationException>(failure));
+    }
+
 }

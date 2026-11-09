@@ -190,7 +190,7 @@ public sealed class DeviceViewModelTests
 
                     var sidebarVersion = Assert.IsType<TextBlock>(
                         window.FindName("SidebarVersionText"));
-                    Assert.Equal("v0.1.11", sidebarVersion.Text);
+                    Assert.Equal("v0.1.13", sidebarVersion.Text);
                     var listLayoutGrid = Assert.IsType<DataGrid>(window.FindName("DeviceGrid"));
                     Assert.True(
                         double.IsPositiveInfinity(listLayoutGrid.MaxHeight),
@@ -487,7 +487,7 @@ public sealed class DeviceViewModelTests
                         System.Reflection.BindingFlags.Instance |
                         System.Reflection.BindingFlags.NonPublic);
                     Assert.NotNull(applyEngineState);
-                    applyEngineState.Invoke(window, [false]);
+                    applyEngineState.Invoke(window, [false, false]);
 
                     Assert.Equal("Idle", topStatus.Text);
                     Assert.Equal("Idle", uptime.Text);
