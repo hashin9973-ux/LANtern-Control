@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Collections.Concurrent;
 using System.Threading.Channels;
 
@@ -47,7 +48,10 @@ public sealed class PriorityPacketInjectionQueue
     /// SharpPcap's packet-arrival callback). A full priority queue is fatal:
     /// the caller must not pretend enforcement succeeded.
     /// </summary>
-    public void EnqueuePriority(byte[] frame, Action? onSent = null)
+    public void EnqueuePriority(
+        byte[] frame,
+        Action? onSent = null,
+        Action<TimeSpan>? onQueueLatency = null)
     {
         ArgumentNullException.ThrowIfNull(frame);
         if (frame.Length == 0)
@@ -67,7 +71,9 @@ public sealed class PriorityPacketInjectionQueue
             QueuedBytes: frame.LongLength,
             Completion: null,
             CancellationToken: CancellationToken.None,
-            OnSent: onSent));
+            EnqueuedAtTimestamp: Stopwatch.GetTimestamp(),
+            OnSent: onSent,
+            OnQueueLatency: onQueueLatency));
         signal.Writer.TryWrite(true);
     }
 
@@ -77,7 +83,8 @@ public sealed class PriorityPacketInjectionQueue
     public Task SendPriorityAsync(
         byte[] frame,
         CancellationToken cancellationToken = default,
-        Action? onSent = null)
+        Action? onSent = null,
+        Action<TimeSpan>? onQueueLatency = null)
     {
         ArgumentNullException.ThrowIfNull(frame);
         if (frame.Length == 0)
@@ -100,14 +107,17 @@ public sealed class PriorityPacketInjectionQueue
             QueuedBytes: frame.LongLength,
             Completion: completion,
             CancellationToken: cancellationToken,
-            OnSent: onSent));
+            EnqueuedAtTimestamp: Stopwatch.GetTimestamp(),
+            OnSent: onSent,
+            OnQueueLatency: onQueueLatency));
         signal.Writer.TryWrite(true);
         return completion.Task.WaitAsync(cancellationToken);
     }
 
     public bool TryEnqueueForwarding(
         IReadOnlyList<byte[]> frames,
-        Action? onSent = null)
+        Action? onSent = null,
+        Action<TimeSpan>? onQueueLatency = null)
     {
         ArgumentNullException.ThrowIfNull(frames);
         if (frames.Count == 0 || frames.Any(static frame => frame is null || frame.Length == 0))
@@ -127,7 +137,9 @@ public sealed class PriorityPacketInjectionQueue
             QueuedBytes: batchBytes,
             Completion: null,
             CancellationToken: CancellationToken.None,
-            OnSent: onSent));
+            EnqueuedAtTimestamp: Stopwatch.GetTimestamp(),
+            OnSent: onSent,
+            OnQueueLatency: onQueueLatency));
         signal.Writer.TryWrite(true);
         return true;
     }
@@ -179,6 +191,8 @@ public sealed class PriorityPacketInjectionQueue
                                 exception));
                     }
 
+                    workItem.OnQueueLatency?.Invoke(
+                        Stopwatch.GetElapsedTime(workItem.EnqueuedAtTimestamp));
                     workItem.OnSent?.Invoke();
                     workItem.Completion?.TrySetResult();
                 }
@@ -249,5 +263,7 @@ public sealed class PriorityPacketInjectionQueue
         long QueuedBytes,
         TaskCompletionSource? Completion,
         CancellationToken CancellationToken,
-        Action? OnSent);
+        long EnqueuedAtTimestamp,
+        Action? OnSent,
+        Action<TimeSpan>? OnQueueLatency);
 }
