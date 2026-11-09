@@ -188,7 +188,10 @@ public sealed class PriorityPacketInjectionQueue
                             (attempt, exception) => onRetry?.Invoke(
                                 workItem.IsPriority ? "ARP enforcement" : "forwarding",
                                 attempt,
-                                exception));
+                                exception),
+                            retryDelay: workItem.IsPriority
+                                ? null
+                                : TimeSpan.FromMilliseconds(10));
                     }
 
                     workItem.OnQueueLatency?.Invoke(
