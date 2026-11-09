@@ -116,6 +116,8 @@ jobs:
 
             Serializes controller lifecycle transitions and awaits packet workers before closing capture handles. Separates capture from packet processing, bounds packet queues, prioritizes ARP/control injection, and reports Npcap capture drops, loaded capture-library details, throughput, queue pressure, injection errors, and latency. Background failures trigger an observable safe shutdown instead of a misleading Running state. Automatic inventory refresh remains passive; full discovery is user-initiated.
           generate_release_notes: true
-          files: |\n            .\outputs\LANtern-Control-v0.1.13-win-x64.zip\n            .\outputs\LANtern-Control-Setup-v0.1.13.msi
+          files: |
+            .\outputs\LANtern-Control-v0.1.13-win-x64.zip
+            .\outputs\LANtern-Control-Setup-v0.1.13.msi
           fail_on_unmatched_files: true
           make_latest: true
