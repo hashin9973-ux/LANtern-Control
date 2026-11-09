@@ -10,16 +10,19 @@ public sealed class AsyncTransitionLockTests
     {
         var gate = new AsyncTransitionLock();
         using var first = await gate.EnterAsync();
+        var secondWaiting = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         var secondEntered = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
         var secondTask = Task.Run(async () =>
         {
+            secondWaiting.TrySetResult();
             using var second = await gate.EnterAsync();
             secondEntered.TrySetResult();
         });
 
-        await Task.Delay(25);
+        await secondWaiting.Task.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.False(secondEntered.Task.IsCompleted);
 
         first.Dispose();
