@@ -54,7 +54,6 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private long forwardedPacketsPerSecondMilli;
     private long forwardedBytesPerSecond;
     private long processCpuMilliPercent;
-    private long lastCaptureStatisticsTimestamp;
     private long previousCaptureBytesSample;
     private long previousForwardedPacketsSample;
     private long previousForwardedBytesSample;
