@@ -20,9 +20,9 @@ public static class ArpEnforcementRetry
                 operation();
                 return;
             }
-            catch (Exception) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                return;
+                throw;
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
