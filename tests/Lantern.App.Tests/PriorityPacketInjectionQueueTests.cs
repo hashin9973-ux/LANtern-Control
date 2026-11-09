@@ -100,4 +100,63 @@ public sealed class PriorityPacketInjectionQueueTests
 
         Assert.Contains("after 3 attempts", exception.Message);
     }
+    [Fact]
+    public async Task RunAsync_PriorityArpTrafficPreemptsAForwardingBacklog()
+    {
+        var queue = new PriorityPacketInjectionQueue(maximumForwardingQueueBytes: 32);
+        var firstForwardStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var allForwarded = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var allowFirstSend = new ManualResetEventSlim(false);
+        using var cancellation = new CancellationTokenSource();
+        var sent = new System.Collections.Concurrent.ConcurrentQueue<byte>();
+        var forwardedCount = 0;
+
+        Assert.True(queue.TryEnqueueForwarding([new byte[] { 0x10 }]));
+        Assert.True(queue.TryEnqueueForwarding([new byte[] { 0x11 }]));
+        Assert.True(queue.TryEnqueueForwarding(
+            [new byte[] { 0x12 }],
+            () => allForwarded.TrySetResult()));
+
+        var runTask = queue.RunAsync(
+            frame =>
+            {
+                if (frame[0] == 0x10)
+                {
+                    firstForwardStarted.TrySetResult();
+                    allowFirstSend.Wait();
+                }
+
+                sent.Enqueue(frame[0]);
+                if (frame[0] is 0x10 or 0x11 or 0x12)
+                {
+                    Interlocked.Increment(ref forwardedCount);
+                }
+            },
+            () => true,
+            onRetry: null,
+            (_, _) => { },
+            cancellation.Token);
+
+        try
+        {
+            await firstForwardStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            var prioritySent = queue.SendPriorityAsync([0x01]);
+            allowFirstSend.Set();
+
+            await prioritySent.WaitAsync(TimeSpan.FromSeconds(2));
+            await allForwarded.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(3, Volatile.Read(ref forwardedCount));
+            Assert.Equal(new byte[] { 0x10, 0x01, 0x11, 0x12 }, sent.ToArray());
+        }
+        finally
+        {
+            allowFirstSend.Set();
+            cancellation.Cancel();
+        }
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => runTask);
+    }
+
 }
