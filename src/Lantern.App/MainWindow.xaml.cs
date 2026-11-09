@@ -1907,8 +1907,9 @@ public partial class MainWindow : Window
             ? "native DLL path unavailable"
             : Path.GetFileName(snapshot.NativeLibraryPath);
         var queueBytes =
-            $"queues {snapshot.CaptureQueueBytes / 1024:N0}/" +
-            $"{snapshot.ForwardingInjectionQueueBytes / 1024:N0} KiB";
+            $"queues capture {snapshot.CaptureQueueBytes / 1024:N0}, " +
+            $"forward {snapshot.ForwardingInjectionQueueBytes / 1024:N0}, " +
+            $"ARP {snapshot.PriorityInjectionQueueBytes / 1024:N0} KiB";
         var health = snapshot.IsHealthy ? "healthy" : "degraded";
         var captureAge = snapshot.LastCaptureAtUtc is { } captureAt
             ? $"{(DateTimeOffset.UtcNow - captureAt).TotalSeconds:N1}s ago"
@@ -1928,8 +1929,8 @@ public partial class MainWindow : Window
             $"{snapshot.CaptureQueueDroppedPackets + snapshot.InjectionQueueDroppedPackets:N0} · " +
             $"send errors {snapshot.InjectionSendFailures:N0}, retries " +
             $"{snapshot.InjectionRetryAttempts:N0} · " +
-            $"ARP wait {snapshot.LastArpQueueLatencyMilliseconds:N1} ms, " +
-            $"forward wait {snapshot.LastForwardingQueueLatencyMilliseconds:N1} ms · " +
+            $"ARP latency {snapshot.LastArpQueueLatencyMilliseconds:N1} ms, " +
+            $"forward latency {snapshot.LastForwardingQueueLatencyMilliseconds:N1} ms · " +
             $"{queueBytes} · capture {captureAge} · ARP send {arpAge}";
 
         if (!string.IsNullOrWhiteSpace(snapshot.NativeLibraryError) ||
