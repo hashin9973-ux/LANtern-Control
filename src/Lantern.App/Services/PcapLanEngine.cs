@@ -18,7 +18,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private const long PriorityQueueMaximumBytes = 1024 * 1024;
     private static readonly TimeSpan CaptureStatisticsInterval = TimeSpan.FromSeconds(2);
     private readonly SemaphoreSlim refreshSync = new(1, 1);
-    private readonly SemaphoreSlim lifecycleSync = new(1, 1);
+    private readonly AsyncTransitionLock lifecycleGate = new();
     private readonly TrafficPolicy policy;
     private readonly DeviceRegistry registry;
     private readonly ClientMappingCache clientMappings = new();
@@ -190,10 +190,8 @@ public sealed class PcapLanEngine : IAsyncDisposable
     public async Task StartAsync(AdapterProfile adapter, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(adapter);
-        await lifecycleSync.WaitAsync(cancellationToken);
-        try
-        {
-            if (IsRunning)
+        using var lifecycleTransition = await lifecycleGate.EnterAsync(cancellationToken);
+        if (IsRunning)
             {
                 return;
             }
@@ -226,7 +224,6 @@ public sealed class PcapLanEngine : IAsyncDisposable
             Interlocked.Exchange(ref processCpuMilliPercent, 0);
             Interlocked.Exchange(ref lastArpQueueLatencyTicks, 0);
             Interlocked.Exchange(ref lastForwardingQueueLatencyTicks, 0);
-            lastCaptureStatisticsTimestamp = 0;
             lastCaptureStatisticsTimestamp = 0;
             previousCaptureBytesSample = 0;
             previousForwardedPacketsSample = 0;
@@ -403,11 +400,6 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
                 throw;
             }
-        }
-        finally
-        {
-            lifecycleSync.Release();
-        }
     }
 
     public async Task<DiscoveryRefreshResult> RefreshNeighborsAsync(
@@ -847,15 +839,8 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
     public async Task StopAsync()
     {
-        await lifecycleSync.WaitAsync();
-        try
-        {
-            await StopCoreAsync();
-        }
-        finally
-        {
-            lifecycleSync.Release();
-        }
+        using var lifecycleTransition = await lifecycleGate.EnterAsync();
+        await StopCoreAsync();
     }
 
     private async Task StopCoreAsync()
