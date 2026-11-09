@@ -987,12 +987,21 @@ public sealed class PcapLanEngine : IAsyncDisposable
         using var poisonTimer = new PeriodicTimer(TimeSpan.FromSeconds(5));
         while (await poisonTimer.WaitForNextTickAsync(cancellationToken))
         {
+            var retryCount = 0;
             await ArpEnforcementRetry.ExecuteAsync(
                 PoisonClients,
                 cancellationToken,
-                (attempt, exception) => RaiseStatus(
-                    $"ARP enforcement packet send failed; retrying attempt " +
-                    $"{attempt}/{ArpEnforcementRetry.MaxAttempts}: {exception.Message}"));
+                (attempt, exception) =>
+                {
+                    retryCount++;
+                    RaiseStatus(
+                        $"ARP enforcement packet send failed; retrying attempt " +
+                        $"{attempt}/{ArpEnforcementRetry.MaxAttempts}: {exception.Message}");
+                });
+            if (retryCount > 0)
+            {
+                RaiseStatus($"ARP enforcement recovered after {retryCount} retry attempt(s).");
+            }
         }
     }
     private async Task RunPresenceProbeLoopAsync(CancellationToken cancellationToken)
