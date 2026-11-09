@@ -37,8 +37,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private BoundedPacketQueue? captureQueue;
     private PriorityPacketInjectionQueue? injectionQueue;
     private PcapRuntimeInfo? pcapRuntimeInfo;
-    private readonly ConcurrentDictionary<string, string> transientDegradedReasons =
-        new(StringComparer.OrdinalIgnoreCase);
+    private readonly EngineHealthFaultRegistry healthFaults = new();
     private string? captureStatisticsWarning;
     private uint previousCaptureReceived;
     private uint previousCaptureDropped;
@@ -104,7 +103,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
         forwardingDevice?.Opened == true &&
         Volatile.Read(ref engineHealthy) == 1 &&
         backgroundFailure is null &&
-        transientDegradedReasons.IsEmpty &&
+        healthFaults.IsHealthy &&
         Volatile.Read(ref captureStatisticsWarning) is null &&
         pcapRuntimeInfo?.NativeLibraryPath is not null &&
         backgroundTask?.IsCompleted != true;
@@ -226,7 +225,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             restoring = false;
             controlling = false;
             backgroundFailure = null;
-            transientDegradedReasons.Clear();
+            healthFaults.Clear();
             Volatile.Write(ref engineHealthy, 0);
             Interlocked.Exchange(ref forwardedPacketCount, 0);
             Interlocked.Exchange(ref droppedPacketCount, 0);
@@ -1228,7 +1227,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private void SetTransientDegraded(string reason)
     {
         var key = GetDegradationKey(reason);
-        if (!transientDegradedReasons.TryAdd(key, reason))
+        if (!healthFaults.TrySet(key, reason))
         {
             return;
         }
@@ -1277,24 +1276,11 @@ public sealed class PcapLanEngine : IAsyncDisposable
         return reason;
     }
 
-    private string? GetTransientDegradedReason() =>
-        transientDegradedReasons.OrderBy(pair => pair.Key, StringComparer.Ordinal)
-            .Select(pair => pair.Value)
-            .FirstOrDefault();
+    private string? GetTransientDegradedReason() => healthFaults.PrimaryReason;
 
     private void ClearTransientDegraded(string expectedPrefix)
     {
-        var removed = false;
-        foreach (var pair in transientDegradedReasons)
-        {
-            if (pair.Value.StartsWith(expectedPrefix, StringComparison.Ordinal) &&
-                transientDegradedReasons.TryRemove(pair.Key, out _))
-            {
-                removed = true;
-            }
-        }
-
-        if (removed)
+        if (healthFaults.TryClear(GetDegradationKey(expectedPrefix)))
         {
             RefreshEngineHealth();
         }
@@ -1323,7 +1309,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
                       arpDevice?.Opened == true &&
                       forwardingDevice?.Opened == true &&
                       backgroundFailure is null &&
-                      transientDegradedReasons.IsEmpty &&
+                      healthFaults.IsHealthy &&
                       Volatile.Read(ref captureStatisticsWarning) is null &&
                       pcapRuntimeInfo?.NativeLibraryPath is not null &&
                       backgroundTask?.IsCompleted != true;
