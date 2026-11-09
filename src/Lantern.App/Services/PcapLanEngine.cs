@@ -19,6 +19,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private static readonly TimeSpan CaptureStatisticsInterval = TimeSpan.FromSeconds(2);
     private readonly SemaphoreSlim refreshSync = new(1, 1);
     private readonly AsyncTransitionLock lifecycleGate = new();
+    private readonly EngineDiagnosticLog diagnosticLog = new();
     private readonly TrafficPolicy policy;
     private readonly DeviceRegistry registry;
     private readonly ClientMappingCache clientMappings = new();
@@ -191,6 +192,12 @@ public sealed class PcapLanEngine : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(adapter);
         using var lifecycleTransition = await lifecycleGate.EnterAsync(cancellationToken);
+        diagnosticLog.Write(
+            "controller.starting",
+            "lifecycle",
+            adapter.Name,
+            "starting",
+            "user-requested-start");
         if (IsRunning)
             {
                 return;
@@ -380,11 +387,24 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 const string activeMessage =
                     "Live monitoring active — packet capture, queue pressure, Npcap drops, " +
                     "and injection health are being monitored.";
+                diagnosticLog.Write(
+                    "controller.running",
+                    "lifecycle",
+                    profile?.Name,
+                    "running",
+                    activeMessage);
                 RaiseStatus(activeMessage);
                 RaiseStateChanged(true, activeMessage, isHealthy: IsHealthy);
             }
             catch (Exception exception)
             {
+                diagnosticLog.Write(
+                    "controller.start-failed",
+                    "lifecycle",
+                    profile?.Name,
+                    "faulted",
+                    "StartAsync did not complete.",
+                    exception);
                 var failure = backgroundFailure;
                 Interlocked.CompareExchange(
                     ref backgroundFailure,
@@ -837,19 +857,25 @@ public sealed class PcapLanEngine : IAsyncDisposable
         }
     }
 
-    public async Task StopAsync()
+    public async Task StopAsync(string reason = "user-requested")
     {
         using var lifecycleTransition = await lifecycleGate.EnterAsync();
-        await StopCoreAsync();
+        await StopCoreAsync(reason);
     }
 
-    private async Task StopCoreAsync()
+    private async Task StopCoreAsync(string reason)
     {
         if (!IsRunning && profile is null && engineCancellation is null)
         {
             return;
         }
 
+        diagnosticLog.Write(
+            "controller.stopping",
+            "lifecycle",
+            profile?.Name,
+            "stopping",
+            reason);
         controlling = false;
         Volatile.Write(ref engineHealthy, 0);
 
@@ -869,6 +895,13 @@ public sealed class PcapLanEngine : IAsyncDisposable
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
+                diagnosticLog.Write(
+                    "network.restoration-failed",
+                    "ARP restoration",
+                    profile?.Name,
+                    "degraded",
+                    "Network restoration failed; handles will still be closed safely.",
+                    exception);
                 RaiseStatus(
                     $"Network restoration reported an error; closing safely: {exception.Message}");
             }
@@ -913,6 +946,12 @@ public sealed class PcapLanEngine : IAsyncDisposable
         var stoppedMessage = failure is null
             ? "Stopped. Corrective ARP mappings were sent."
             : $"Stopped after an engine error: {failure}. Corrective ARP mappings were attempted.";
+        diagnosticLog.Write(
+            "controller.stopped",
+            "lifecycle",
+            null,
+            "stopped",
+            failure ?? reason);
         RaiseStatus(stoppedMessage);
         RaiseStateChanged(false, stoppedMessage, failure, isHealthy: false);
     }
@@ -944,7 +983,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await StopAsync();
+        await StopAsync("dispose");
         GC.SuppressFinalize(this);
     }
 
@@ -1189,6 +1228,12 @@ public sealed class PcapLanEngine : IAsyncDisposable
         }
 
         Volatile.Write(ref engineHealthy, 0);
+        diagnosticLog.Write(
+            "packet-health.degraded",
+            "packet-processing",
+            profile?.Name,
+            "degraded",
+            reason);
         RaiseStatus($"Packet processing health degraded: {reason}");
         RaiseStateChanged(
             IsRunning,
@@ -1248,6 +1293,16 @@ public sealed class PcapLanEngine : IAsyncDisposable
             var message = healthy
                 ? "Packet capture and processing queues recovered; enforcement health is restored."
                 : "Packet processing health is degraded.";
+            if (healthy)
+            {
+                diagnosticLog.Write(
+                    "packet-health.recovered",
+                    "packet-processing",
+                    profile?.Name,
+                    "healthy",
+                    message);
+            }
+
             RaiseStatus(message);
             RaiseStateChanged(IsRunning, message, isHealthy: healthy);
         }
@@ -1844,6 +1899,13 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
         controlling = false;
         Volatile.Write(ref engineHealthy, 0);
+        diagnosticLog.Write(
+            "controller.faulted",
+            source,
+            profile?.Name,
+            "faulted",
+            failure,
+            exception);
         RaiseStatus($"{failure}; enforcement is degraded and a serialized network restoration is starting.");
         RaiseStateChanged(
             IsRunning,
@@ -1857,7 +1919,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
         {
             try
             {
-                await StopAsync();
+                await StopAsync("background-failure");
             }
             catch (Exception stopException)
             {
