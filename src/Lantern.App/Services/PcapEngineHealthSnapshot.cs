@@ -1,0 +1,26 @@
+namespace Lantern.App.Services;
+
+public sealed record PcapEngineHealthSnapshot(
+    bool IsRunning,
+    bool IsHealthy,
+    string? Failure,
+    string CaptureLibraryVersion,
+    string SharpPcapVersion,
+    string? NativeLibraryPath,
+    string? NativeLibraryFileVersion,
+    long CaptureReceivedPackets,
+    long CaptureKernelDroppedPackets,
+    long CaptureQueueDroppedPackets,
+    long InjectionQueueDroppedPackets,
+    long ForwardedPackets,
+    long PolicyDroppedPackets,
+    long InjectionSendFailures,
+    long InjectionRetryAttempts,
+    long CaptureQueueBytes,
+    long ForwardingInjectionQueueBytes,
+    long PriorityInjectionQueueBytes,
+    DateTimeOffset? LastCaptureAtUtc,
+    DateTimeOffset? LastArpInjectionAtUtc,
+    DateTimeOffset? LastForwardedInjectionAtUtc,
+    string? CaptureStatisticsWarning,
+    string? NativeLibraryError);
