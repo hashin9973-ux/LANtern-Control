@@ -1318,7 +1318,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             arp.SenderMac,
             DateTimeOffset.UtcNow,
             GetKnownHostName(arp.SenderMac));
-        _ = ResolveNameAsync(arp.SenderIp, arp.SenderMac);
+        _ = ResolveNameSafelyAsync(arp.SenderIp, arp.SenderMac);
         RespondToArpRequest(arp);
         if (controlling && needsPoison)
         {
@@ -1326,6 +1326,21 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 new KeyValuePair<IPAddress, PhysicalAddress>(
                     arp.SenderIp,
                     arp.SenderMac));
+        }
+    }
+
+    private async Task ResolveNameSafelyAsync(IPAddress address, PhysicalAddress mac)
+    {
+        try
+        {
+            await ResolveNameAsync(address, mac);
+        }
+        catch (Exception exception)
+        {
+            // Name resolution is optional inventory work. Surface its failure
+            // without allowing a fire-and-forget task to become unobserved or
+            // to stop packet forwarding.
+            RaiseStatus($"Optional name resolution failed for {address}: {exception.Message}");
         }
     }
 
@@ -1337,28 +1352,35 @@ public sealed class PcapLanEngine : IAsyncDisposable
             return;
         }
 
-        var netBiosTask = NetBiosNameResolver.ResolveAsync(address);
-        var mdnsTask = MdnsNameResolver.ResolveAsync(address);
-        var dnsTask = ResolveDnsNameAsync(address);
-        await Task.WhenAll(netBiosTask, mdnsTask, dnsTask);
-        foreach (var name in new[] { netBiosTask.Result, mdnsTask.Result, dnsTask.Result })
+        try
         {
-            if (resolvedNameClaims.TryClaim(
-                    mac,
-                    name,
-                    out var acceptedName,
-                    out var isNewClaim))
+            var netBiosTask = NetBiosNameResolver.ResolveAsync(address);
+            var mdnsTask = MdnsNameResolver.ResolveAsync(address);
+            var dnsTask = ResolveDnsNameAsync(address);
+            await Task.WhenAll(netBiosTask, mdnsTask, dnsTask);
+            foreach (var name in new[] { netBiosTask.Result, mdnsTask.Result, dnsTask.Result })
             {
-                registry.SetHostName(mac, acceptedName);
-                if (isNewClaim)
+                if (resolvedNameClaims.TryClaim(
+                        mac,
+                        name,
+                        out var acceptedName,
+                        out var isNewClaim))
                 {
-                    DeviceIdentityLearned?.Invoke(
-                        this,
-                        new DeviceIdentityLearnedEventArgs(mac, acceptedName));
-                }
+                    registry.SetHostName(mac, acceptedName);
+                    if (isNewClaim)
+                    {
+                        DeviceIdentityLearned?.Invoke(
+                            this,
+                            new DeviceIdentityLearnedEventArgs(mac, acceptedName));
+                    }
 
-                return;
+                    return;
+                }
             }
+        }
+        finally
+        {
+            resolvingNames.TryRemove(key, out _);
         }
     }
 
