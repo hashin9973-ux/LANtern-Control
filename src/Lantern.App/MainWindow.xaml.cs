@@ -330,7 +330,7 @@ public partial class MainWindow : Window
             settingsDirty = false;
             ConfigureAutoScanTimer();
             DetailStatusText.Text = enabled
-                ? $"Automatic device discovery enabled: a full scan runs every {settings.AutoScanIntervalSeconds} seconds."
+                ? $"Automatic inventory refresh enabled: the Windows neighbor cache is refreshed every {settings.AutoScanIntervalSeconds} seconds."
                 : "Automatic device discovery disabled.";
         }
         catch (IOException exception)
@@ -372,7 +372,7 @@ public partial class MainWindow : Window
             if (settings.AutoScanEnabled)
             {
                 DetailStatusText.Text =
-                    $"Automatic device discovery will run every {settings.AutoScanIntervalSeconds} seconds.";
+                    $"Automatic inventory refresh will run every {settings.AutoScanIntervalSeconds} seconds.";
             }
         }
         catch (IOException exception)
@@ -928,7 +928,7 @@ public partial class MainWindow : Window
             var scanStartedAt = DateTimeOffset.UtcNow;
             SetStatus(
                 isAutomatic
-                    ? $"Automatic device discovery running (every {settings.AutoScanIntervalSeconds} seconds)…"
+                    ? $"Automatic inventory refresh running (every {settings.AutoScanIntervalSeconds} seconds)…"
                     : "Refreshing the neighbor cache and performing fast, paced ARP discovery first…",
                 null);
 
@@ -1040,7 +1040,7 @@ public partial class MainWindow : Window
 
             if (isAutomatic)
             {
-                status = $"Automatic scan completed ({settings.AutoScanIntervalSeconds}-second interval). {status}";
+                status = $"Automatic inventory refresh completed ({settings.AutoScanIntervalSeconds}-second interval). {status}";
             }
 
             DetailStatusText.Text = status;
