@@ -35,6 +35,8 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private readonly ResolvedDeviceNameClaims resolvedNameClaims = new(Dns.GetHostName());
     private readonly ConcurrentDictionary<string, byte> resolvingNames =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, DateTimeOffset> lastRuleEnforcementAt =
+        new(StringComparer.OrdinalIgnoreCase);
     private CancellationTokenSource? engineCancellation;
     private Task? backgroundTask;
     private Task? injectionWorkerTask;
@@ -43,6 +45,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private PcapRuntimeInfo? pcapRuntimeInfo;
     private readonly EngineHealthFaultRegistry healthFaults = new();
     private string? captureStatisticsWarning;
+    private int lastReportedHealthy;
     private uint previousCaptureReceived;
     private uint previousCaptureDropped;
     private bool captureStatisticsInitialized;
@@ -120,6 +123,9 @@ public sealed class PcapLanEngine : IAsyncDisposable
         var runtime = pcapRuntimeInfo;
         var currentCaptureQueue = captureQueue;
         var currentInjectionQueue = injectionQueue;
+        var configuredRuleHints = GetConfiguredRuleHints();
+        var observedRuleDeviceCount = configuredRuleHints.Count(IsRuleTargetObserved);
+        var confirmedRuleDeviceCount = configuredRuleHints.Count(IsRuleTargetRecentlyEnforced);
         return new PcapEngineHealthSnapshot(
             IsRunning,
             IsHealthy,
@@ -154,7 +160,40 @@ public sealed class PcapLanEngine : IAsyncDisposable
             ReadTimestamp(Interlocked.Read(ref lastArpInjectionUtcTicks)),
             ReadTimestamp(Interlocked.Read(ref lastForwardedInjectionUtcTicks)),
             Volatile.Read(ref captureStatisticsWarning),
-            runtime?.Error);
+            runtime?.Error,
+            configuredRuleHints.Length,
+            observedRuleDeviceCount,
+            confirmedRuleDeviceCount);
+    }
+
+    private KnownDeviceHint[] GetConfiguredRuleHints() =>
+        knownDeviceHints
+            .Where(hint =>
+                policy.GetInterceptionTargets(hint.MacAddress.ToString()) != InterceptionTargets.None)
+            .DistinctBy(hint => TrafficPolicy.NormalizeMac(hint.MacAddress.ToString()))
+            .ToArray();
+
+    private bool IsRuleTargetObserved(KnownDeviceHint hint) =>
+        clientMappings.Mappings.Values.Any(mac => mac.Equals(hint.MacAddress));
+
+    private bool IsRuleTargetRecentlyEnforced(KnownDeviceHint hint)
+    {
+        var macKey = TrafficPolicy.NormalizeMac(hint.MacAddress.ToString());
+        if (!IsRuleTargetObserved(hint) ||
+            !lastRuleEnforcementAt.TryGetValue(macKey, out var lastSentAt))
+        {
+            return false;
+        }
+
+        var age = DateTimeOffset.UtcNow - lastSentAt;
+        return age >= TimeSpan.Zero && age <= TimeSpan.FromSeconds(15);
+    }
+
+    private void MarkRuleTargetEnforcementSent(PhysicalAddress macAddress)
+    {
+        lastRuleEnforcementAt[TrafficPolicy.NormalizeMac(macAddress.ToString())] =
+            DateTimeOffset.UtcNow;
+        RefreshEngineHealth();
     }
 
     private static DateTimeOffset? ReadTimestamp(long utcTicks) =>
@@ -226,6 +265,11 @@ public sealed class PcapLanEngine : IAsyncDisposable
             registry.BeginSession();
             identityMonitor.Reset();
             SeedRememberedInventory();
+            lastPresenceProbeAt.Clear();
+            lastPresenceProbeBatchAt = DateTimeOffset.MinValue;
+            lastDiscoveryProbeBatchAt = DateTimeOffset.MinValue;
+            presenceProbeAdapterId = adapter.Id;
+            lastRuleEnforcementAt.Clear();
 
             var clients = clientMappings.Mappings;
             restoring = false;
@@ -233,6 +277,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             backgroundFailure = null;
             healthFaults.Clear();
             Volatile.Write(ref engineHealthy, 0);
+            Interlocked.Exchange(ref lastReportedHealthy, 0);
             Interlocked.Exchange(ref forwardedPacketCount, 0);
             Interlocked.Exchange(ref droppedPacketCount, 0);
             Interlocked.Exchange(ref captureReceivedPackets, 0);
@@ -286,6 +331,18 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 // Force SharpPcap to resolve its native capture library, then record
                 // the actual loaded module path instead of inferring it from installation state.
                 pcapRuntimeInfo = PcapRuntimeInspector.Inspect();
+                diagnosticLog.Write(
+                    "npcap.runtime.loaded",
+                    "Npcap runtime",
+                    profile?.Name,
+                    pcapRuntimeInfo.NativeLibraryPath is null ? "unverified" : "verified",
+                    $"SharpPcap {pcapRuntimeInfo.SharpPcapVersion}; " +
+                    $"capture library {pcapRuntimeInfo.CaptureLibraryVersion}; " +
+                    $"native module {pcapRuntimeInfo.NativeLibraryPath ?? "unavailable"}; " +
+                    $"file version {pcapRuntimeInfo.NativeLibraryFileVersion ?? "unavailable"}.",
+                    pcapRuntimeInfo.Error is null
+                        ? null
+                        : new InvalidOperationException(pcapRuntimeInfo.Error));
                 if (pcapRuntimeInfo.NativeLibraryPath is null)
                 {
                     var warning =
@@ -368,7 +425,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
                     SendInjectionPacket,
                     () => controlling && !restoring,
                     OnInjectionRetry,
-                    HandleBackgroundFailure,
+                    HandlePacketInjectionFailure,
                     engineToken);
                 var activeInjectionWorkerTask = injectionWorkerTask;
                 var injectionTask = BackgroundLoopSupervisor.RunAsync(
@@ -404,11 +461,61 @@ public sealed class PcapLanEngine : IAsyncDisposable
                         backgroundFailure ?? "A required packet-processing worker failed during startup.");
                 }
 
-                PoisonClients();
+                var configuredRuleHints = GetConfiguredRuleHints();
+                var configuredMacAddresses = configuredRuleHints
+                    .Select(hint => TrafficPolicy.NormalizeMac(hint.MacAddress.ToString()))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var ruleProbeTargets = DeviceProbePolicy.GetRuleTargets(
+                    knownDeviceHints,
+                    adapter,
+                    configuredMacAddresses);
+                if (ruleProbeTargets.Count > 0)
+                {
+                    RaiseStatus(
+                        $"Verifying {ruleProbeTargets.Count} saved device-control target(s) on the selected LAN…");
+                    try
+                    {
+                        await ProbeAddressesAsync(
+                            adapter,
+                            force: true,
+                            cancellationToken,
+                            onlyAddresses: ruleProbeTargets.ToHashSet());
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                    catch (Exception exception)
+                    {
+                        HandlePacketInjectionFailure("Saved device presence probe", exception);
+                    }
+                }
+
+                if (backgroundFailure is not null ||
+                    backgroundTask?.IsCompleted == true)
+                {
+                    throw new InvalidOperationException(
+                        backgroundFailure ?? "A packet-processing worker failed while verifying saved device targets.");
+                }
+
+                await ApplyConfiguredRulesAsync(cancellationToken);
+                if (backgroundFailure is not null ||
+                    backgroundTask?.IsCompleted == true)
+                {
+                    throw new InvalidOperationException(
+                        backgroundFailure ?? "A packet-processing worker failed while applying saved device rules.");
+                }
+
                 Volatile.Write(ref engineHealthy, 1);
-                var activeMessage = IsHealthy
-                    ? "Control is running — packet capture, queue pressure, Npcap drops, and injection health are being monitored."
-                    : $"Control is running in DEGRADED mode: {GetHealthSnapshot().Failure ?? "packet health could not be fully verified."}";
+                var startupSnapshot = GetHealthSnapshot();
+                Interlocked.Exchange(ref lastReportedHealthy, startupSnapshot.IsHealthy ? 1 : 0);
+                var activeMessage = startupSnapshot.IsHealthy
+                    ? startupSnapshot.ConfiguredRuleDeviceCount == 0
+                        ? "Packet capture is healthy and device inventory monitoring is running; no active device-control rules are configured."
+                        : $"Packet capture is healthy; successful ARP updates were sent for " +
+                          $"{startupSnapshot.ConfirmedRuleDeviceCount} of " +
+                          $"{startupSnapshot.ConfiguredRuleDeviceCount} configured device rule target(s)."
+                    : $"Packet capture is running in DEGRADED mode: {startupSnapshot.Failure ?? "packet health could not be fully verified."}";
                 diagnosticLog.Write(
                     "controller.running",
                     "lifecycle",
@@ -587,7 +694,8 @@ public sealed class PcapLanEngine : IAsyncDisposable
         AdapterProfile activeProfile,
         bool force,
         CancellationToken cancellationToken,
-        bool discoverSubnet = false)
+        bool discoverSubnet = false,
+        IReadOnlySet<IPAddress>? onlyAddresses = null)
     {
         if (!string.Equals(
                 presenceProbeAdapterId,
@@ -614,7 +722,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             return DiscoveryProbeResult.Empty;
         }
 
-        var targets = discoverSubnet
+        var candidateTargets = discoverSubnet
             ? DeviceProbePolicy.GetDiscoveryTargets(activeProfile)
             : DeviceProbePolicy.GetTargets(
                 registry.Peek(),
@@ -622,6 +730,9 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 now,
                 force,
                 lastPresenceProbeAt);
+        var targets = onlyAddresses is null
+            ? candidateTargets
+            : onlyAddresses.ToArray();
         if (targets.Count == 0)
         {
             return DiscoveryProbeResult.Empty;
@@ -663,7 +774,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
         }
 
         async Task<DiscoveryProbeResult> SendBatchesAsync(
-            Action<IPAddress, byte[]> sendProbe)
+            Func<IPAddress, byte[], Task> sendProbe)
         {
             MarkBatchStarted();
             var firstPassSent = await SendPresenceProbesAsync(
@@ -716,9 +827,9 @@ public sealed class PcapLanEngine : IAsyncDisposable
             try
             {
                 return await SendBatchesAsync(
-                    (address, bytes) =>
+                    async (address, bytes) =>
                     {
-                        SendArpPacket(bytes);
+                        await SendArpPacketAsync(bytes, cancellationToken);
                         lastPresenceProbeAt[address] = DateTimeOffset.UtcNow;
                     });
             }
@@ -758,6 +869,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
                     }
 
                     lastPresenceProbeAt[address] = DateTimeOffset.UtcNow;
+                    return Task.CompletedTask;
                 });
         }
         finally
@@ -806,7 +918,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
     }
 
     private static async Task<int> SendPresenceProbesAsync(
-        Action<IPAddress, byte[]> sendProbe,
+        Func<IPAddress, byte[], Task> sendProbe,
         AdapterProfile activeProfile,
         IReadOnlyList<IPAddress> targets,
         CancellationToken cancellationToken,
@@ -818,7 +930,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
         foreach (var address in targets)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            sendProbe(
+            await sendProbe(
                 address,
                 EthernetFrameCodec.BuildArpRequest(
                     activeProfile.LocalMac,
@@ -918,6 +1030,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             reason);
         controlling = false;
         Volatile.Write(ref engineHealthy, 0);
+        Interlocked.Exchange(ref lastReportedHealthy, 0);
 
         // Let an in-flight presence/discovery probe finish before restoration.
         // Once the semaphore is acquired, no maintenance probe can enqueue ARP
@@ -1236,6 +1349,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
                         Interlocked.Exchange(
                             ref lastForwardedInjectionUtcTicks,
                             DateTimeOffset.UtcNow.UtcTicks);
+                        ClearTransientDegraded("Forwarding packet injection");
                     },
                     RecordForwardingQueueLatency))
             {
@@ -1325,7 +1439,6 @@ public sealed class PcapLanEngine : IAsyncDisposable
             return;
         }
 
-        Volatile.Write(ref engineHealthy, 0);
         diagnosticLog.Write(
             "packet-health.degraded",
             "packet-processing",
@@ -1333,14 +1446,26 @@ public sealed class PcapLanEngine : IAsyncDisposable
             "degraded",
             reason);
         RaiseStatus($"Packet processing health degraded: {reason}");
-        RaiseStateChanged(
-            IsRunning,
-            $"Packet processing health degraded: {reason}",
-            isHealthy: false);
+        RefreshEngineHealth();
     }
 
     private static string GetDegradationKey(string reason)
     {
+        if (reason.StartsWith("ARP packet injection", StringComparison.Ordinal))
+        {
+            return "arp-injection";
+        }
+
+        if (reason.StartsWith("Forwarding packet injection", StringComparison.Ordinal))
+        {
+            return "forwarding-injection";
+        }
+
+        if (reason.StartsWith("ARP priority injection queue", StringComparison.Ordinal))
+        {
+            return "priority-queue";
+        }
+
         if (reason.StartsWith("Capture processing queue", StringComparison.Ordinal))
         {
             return "capture-queue";
@@ -1480,7 +1605,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
     {
         var healthy = IsHealthy;
         var newValue = healthy ? 1 : 0;
-        var previous = Interlocked.Exchange(ref engineHealthy, newValue);
+        var previous = Interlocked.Exchange(ref lastReportedHealthy, newValue);
         if (previous != newValue)
         {
             var message = healthy
@@ -1697,6 +1822,31 @@ public sealed class PcapLanEngine : IAsyncDisposable
         }
     }
 
+    private async Task ApplyConfiguredRulesAsync(CancellationToken cancellationToken)
+    {
+        foreach (var client in clientMappings.Mappings.ToArray())
+        {
+            var targets = policy.GetInterceptionTargets(client.Value.ToString());
+            if (targets == InterceptionTargets.None)
+            {
+                continue;
+            }
+
+            try
+            {
+                await SendPoisonClientAsync(client, targets, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                HandlePacketInjectionFailure("Saved device rule enforcement", exception);
+            }
+        }
+    }
+
     private void PoisonClients()
     {
         var clients = clientMappings.Mappings;
@@ -1739,6 +1889,42 @@ public sealed class PcapLanEngine : IAsyncDisposable
         PoisonClient(client, policy.GetInterceptionTargets(client.Value.ToString()));
     }
 
+    private async Task SendPoisonClientAsync(
+        KeyValuePair<IPAddress, PhysicalAddress> client,
+        InterceptionTargets targets,
+        CancellationToken cancellationToken)
+    {
+        var activeProfile = profile;
+        var activeGatewayMac = gatewayMac;
+        if (restoring || targets == InterceptionTargets.None ||
+            activeProfile is null || activeGatewayMac is null)
+        {
+            return;
+        }
+
+        var frames = ArpInterceptionFrames.BuildPoison(
+            activeProfile.LocalMac,
+            activeProfile.GatewayAddress,
+            activeGatewayMac,
+            client.Key,
+            client.Value);
+        foreach (var frame in frames.Select(targets))
+        {
+            await SendArpPacketAsync(frame, cancellationToken);
+        }
+
+        var controllerFrames = ArpInterceptionFrames.BuildControllerProtection(
+            activeProfile.LocalMac,
+            activeProfile.LocalAddress,
+            activeGatewayMac,
+            activeProfile.GatewayAddress,
+            client.Value,
+            client.Key);
+        await SendArpPacketAsync(controllerFrames.ClientToController, cancellationToken);
+        await SendArpPacketAsync(controllerFrames.GatewayToController, cancellationToken);
+        MarkRuleTargetEnforcementSent(client.Value);
+    }
+
     private void PoisonClient(
         KeyValuePair<IPAddress, PhysicalAddress> client,
         InterceptionTargets targets)
@@ -1757,10 +1943,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             activeGatewayMac,
             client.Key,
             client.Value);
-        foreach (var frame in frames.Select(targets))
-        {
-            SendArpPacket(frame);
-        }
+        var packets = frames.Select(targets).ToList();
 
         var controllerFrames = ArpInterceptionFrames.BuildControllerProtection(
             activeProfile.LocalMac,
@@ -1769,8 +1952,22 @@ public sealed class PcapLanEngine : IAsyncDisposable
             activeProfile.GatewayAddress,
             client.Value,
             client.Key);
-        SendArpPacket(controllerFrames.ClientToController);
-        SendArpPacket(controllerFrames.GatewayToController);
+        packets.Add(controllerFrames.ClientToController);
+        packets.Add(controllerFrames.GatewayToController);
+
+        var macKey = TrafficPolicy.NormalizeMac(client.Value.ToString());
+        var batch = new PacketBatchCompletion(
+            packets.Count,
+            () => MarkRuleTargetEnforcementSent(client.Value),
+            () => lastRuleEnforcementAt.TryRemove(macKey, out _));
+
+        foreach (var packet in packets)
+        {
+            SendArpPacket(
+                packet,
+                batch.MarkPacketSent,
+                batch.MarkPacketFailed);
+        }
     }
 
     private async Task ApplyInterceptionTransitionAsync(
@@ -1786,7 +1983,10 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
         if (transition.Restore == InterceptionTargets.None)
         {
-            PoisonClient(client);
+            await SendPoisonClientAsync(
+                client,
+                policy.GetInterceptionTargets(client.Value.ToString()),
+                CancellationToken.None);
             return;
         }
 
@@ -1798,7 +1998,10 @@ public sealed class PcapLanEngine : IAsyncDisposable
             }
 
             await SendRestoreFramesAsync(client, activeProfile, activeGatewayMac);
-            PoisonClient(client);
+            await SendPoisonClientAsync(
+                client,
+                policy.GetInterceptionTargets(client.Value.ToString()),
+                CancellationToken.None);
             if (attempt < 2)
             {
                 await Task.Delay(40);
@@ -1882,26 +2085,44 @@ public sealed class PcapLanEngine : IAsyncDisposable
         }
     }
 
-    private void SendArpPacket(byte[] bytes)
+    private void SendArpPacket(
+        byte[] bytes,
+        Action? onSent = null,
+        Action? onFailed = null)
     {
         var activeQueue = injectionQueue;
         if (activeQueue is null || injectionWorkerTask?.IsCompleted == true)
         {
-            SendArpPacketDirect(bytes);
+            try
+            {
+                SendArpPacketDirect(bytes);
+                onSent?.Invoke();
+            }
+            catch (Exception exception)
+            {
+                onFailed?.Invoke();
+                HandlePacketInjectionFailure("ARP packet injection", exception);
+            }
+
             return;
         }
 
         try
         {
             activeQueue.EnqueuePriority(
-            bytes,
-            RecordArpInjectionSuccess,
-            RecordArpQueueLatency);
+                bytes,
+                () =>
+                {
+                    RecordArpInjectionSuccess();
+                    onSent?.Invoke();
+                },
+                RecordArpQueueLatency,
+                onFailed);
         }
         catch (InvalidOperationException exception)
         {
-            HandleBackgroundFailure("ARP priority injection queue", exception);
-            throw;
+            onFailed?.Invoke();
+            HandlePacketInjectionFailure("ARP priority injection queue", exception);
         }
     }
 
@@ -1930,7 +2151,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
         }
         catch (InvalidOperationException exception)
         {
-            HandleBackgroundFailure("ARP priority injection queue", exception);
+            HandlePacketInjectionFailure("ARP priority injection queue", exception);
             throw;
         }
     }
@@ -1967,7 +2188,10 @@ public sealed class PcapLanEngine : IAsyncDisposable
         var activeDevice = PacketInjectionPolicy.SelectHandle(arpDevice, forwardingDevice);
         try
         {
-            activeDevice.SendPacket(bytes);
+            lock (arpSendSync)
+            {
+                activeDevice.SendPacket(bytes);
+            }
         }
         catch (Exception exception)
         {
@@ -1980,8 +2204,11 @@ public sealed class PcapLanEngine : IAsyncDisposable
         }
     }
 
-    private void RecordArpInjectionSuccess() =>
+    private void RecordArpInjectionSuccess()
+    {
         Interlocked.Exchange(ref lastArpInjectionUtcTicks, DateTimeOffset.UtcNow.UtcTicks);
+        ClearTransientDegraded("ARP packet injection");
+    }
 
     private void RecordArpQueueLatency(TimeSpan latency)
     {
@@ -2103,6 +2330,32 @@ public sealed class PcapLanEngine : IAsyncDisposable
         return bytes.All(value => value == 0) || bytes.All(value => value == 0xff);
     }
 
+    private void HandlePacketInjectionFailure(string source, Exception exception)
+    {
+        var isArpFailure =
+            source.StartsWith("ARP", StringComparison.OrdinalIgnoreCase) ||
+            source.StartsWith("Saved device", StringComparison.OrdinalIgnoreCase);
+        if (isArpFailure)
+        {
+            lastRuleEnforcementAt.Clear();
+        }
+
+        var component = isArpFailure
+            ? "ARP packet injection"
+            : "Forwarding packet injection";
+        var reason = $"{component} failed: {exception.Message}";
+        diagnosticLog.Write(
+            "packet-injection.failed",
+            source,
+            profile?.Name,
+            "degraded",
+            reason,
+            exception);
+        SetTransientDegraded(reason);
+        RaiseStatus(
+            $"{reason}. Capture and monitoring remain active; the next enforcement cycle will retry.");
+    }
+
     private void HandleBackgroundFailure(string source, Exception exception)
     {
         var failure = $"{source}: {exception}";
@@ -2113,6 +2366,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
         controlling = false;
         Volatile.Write(ref engineHealthy, 0);
+        Interlocked.Exchange(ref lastReportedHealthy, 0);
         diagnosticLog.Write(
             "controller.faulted",
             source,

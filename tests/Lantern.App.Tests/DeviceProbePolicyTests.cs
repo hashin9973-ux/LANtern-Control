@@ -76,6 +76,48 @@ public sealed class DeviceProbePolicyTests
     }
 
     [Fact]
+    public void GetRuleTargets_OnlyReturnsSavedActiveRuleAddressesOnTheSelectedLan()
+    {
+        var adapter = new AdapterProfile(
+            "wifi",
+            "Wi-Fi",
+            "Test Wi-Fi",
+            IPAddress.Parse("192.168.31.10"),
+            24,
+            IPAddress.Parse("192.168.31.1"),
+            PhysicalAddress.Parse("001122334455"));
+        var activeMac = "AABBCCDDEE20";
+        var inactiveMac = "AABBCCDDEE21";
+        var outsideMac = "AABBCCDDEE22";
+        var hints = new[]
+        {
+            new KnownDeviceHint(
+                PhysicalAddress.Parse(activeMac),
+                IPAddress.Parse("192.168.31.20"),
+                "Saved active-rule device"),
+            new KnownDeviceHint(
+                PhysicalAddress.Parse(inactiveMac),
+                IPAddress.Parse("192.168.31.21"),
+                "Saved device without a rule"),
+            new KnownDeviceHint(
+                PhysicalAddress.Parse(outsideMac),
+                IPAddress.Parse("192.168.32.22"),
+                "Saved address outside the selected LAN"),
+            new KnownDeviceHint(
+                PhysicalAddress.Parse("AABBCCDDEE23"),
+                null,
+                "Saved device without a last-known address"),
+        };
+
+        var targets = DeviceProbePolicy.GetRuleTargets(
+            hints,
+            adapter,
+            new HashSet<string>([activeMac], StringComparer.OrdinalIgnoreCase));
+
+        Assert.Equal(new[] { IPAddress.Parse("192.168.31.20") }, targets);
+    }
+
+    [Fact]
     public void GetTargets_StopsAtTheMaximumBatchSize()
     {
         var now = DateTimeOffset.Parse("2026-11-06T12:00:00Z");

@@ -101,6 +101,112 @@ public sealed class PriorityPacketInjectionQueueTests
         Assert.Contains("after 3 attempts", exception.Message);
     }
     [Fact]
+    public async Task RunAsync_ContinuesWithNextPriorityItemAfterAnUnrecoverableSendFailure()
+    {
+        var queue = new PriorityPacketInjectionQueue(maximumForwardingQueueBytes: 32);
+        var failureReported = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var sent = new System.Collections.Concurrent.ConcurrentQueue<byte>();
+        var failures = 0;
+        using var cancellation = new CancellationTokenSource();
+
+        var failedSend = queue.SendPriorityAsync([0x55]);
+        var nextSend = queue.SendPriorityAsync([0x66]);
+        var runTask = queue.RunAsync(
+            frame =>
+            {
+                if (frame[0] == 0x55)
+                {
+                    throw new IOException("One Npcap send failed.");
+                }
+
+                sent.Enqueue(frame[0]);
+            },
+            () => true,
+            onRetry: null,
+            (_, _) =>
+            {
+                Interlocked.Increment(ref failures);
+                failureReported.TrySetResult();
+            },
+            cancellation.Token);
+
+        try
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => failedSend.WaitAsync(TimeSpan.FromSeconds(5)));
+            await nextSend.WaitAsync(TimeSpan.FromSeconds(5));
+            await failureReported.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.False(runTask.IsCompleted);
+            Assert.Equal(new byte[] { 0x66 }, sent.ToArray());
+            Assert.Equal(1, Volatile.Read(ref failures));
+        }
+        finally
+        {
+            cancellation.Cancel();
+        }
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => runTask);
+    }
+
+    [Fact]
+    public async Task RunAsync_FireAndForgetPriorityFailureMarksBatchFailedAndContinues()
+    {
+        var queue = new PriorityPacketInjectionQueue(maximumForwardingQueueBytes: 32);
+        var batchCompleted = 0;
+        var batchFailed = 0;
+        var failureReported = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var nextItemSent = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cancellation = new CancellationTokenSource();
+
+        var batch = new PacketBatchCompletion(
+            2,
+            () => Interlocked.Increment(ref batchCompleted),
+            () => Interlocked.Increment(ref batchFailed));
+
+        queue.EnqueuePriority(
+            [0x55],
+            onSent: batch.MarkPacketSent,
+            onFailed: batch.MarkPacketFailed);
+
+        var runTask = queue.RunAsync(
+            frame =>
+            {
+                if (frame[0] == 0x55)
+                {
+                    throw new IOException("One ARP work item failed.");
+                }
+
+                nextItemSent.TrySetResult();
+            },
+            () => true,
+            onRetry: null,
+            (_, _) => failureReported.TrySetResult(),
+            cancellation.Token);
+
+        try
+        {
+            var nextItem = queue.SendPriorityAsync([0x66]);
+            await failureReported.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(0, Volatile.Read(ref batchCompleted));
+            Assert.Equal(1, Volatile.Read(ref batchFailed));
+
+            await nextItem.WaitAsync(TimeSpan.FromSeconds(5));
+            await nextItemSent.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.False(runTask.IsCompleted);
+        }
+        finally
+        {
+            cancellation.Cancel();
+        }
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => runTask);
+    }
+
+    [Fact]
     public async Task RunAsync_PriorityArpTrafficPreemptsAForwardingBacklog()
     {
         var queue = new PriorityPacketInjectionQueue(maximumForwardingQueueBytes: 32);

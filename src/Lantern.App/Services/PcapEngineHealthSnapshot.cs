@@ -30,4 +30,7 @@ public sealed record PcapEngineHealthSnapshot(
     DateTimeOffset? LastArpInjectionAtUtc,
     DateTimeOffset? LastForwardedInjectionAtUtc,
     string? CaptureStatisticsWarning,
-    string? NativeLibraryError);
+    string? NativeLibraryError,
+    int ConfiguredRuleDeviceCount,
+    int ObservedRuleDeviceCount,
+    int ConfirmedRuleDeviceCount);
