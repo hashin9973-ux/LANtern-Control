@@ -48,7 +48,7 @@ public sealed class EngineDiagnosticLogTests
     public void Write_DoesNotThrowWhenLogPathCannotBeWritten()
     {
         var logger = new EngineDiagnosticLog(
-            Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "missing", "engine.jsonl"));
+            Path.Combine(Path.GetTempPath(), "lantern\0engine.jsonl"));
 
         var exception = Record.Exception(() =>
             logger.Write("controller.stopped", "lifecycle", null, "stopped"));
