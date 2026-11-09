@@ -1288,8 +1288,12 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private void RefreshEngineHealth()
     {
         var healthy = IsRunning &&
+                      arpDevice?.Opened == true &&
+                      forwardingDevice?.Opened == true &&
                       backgroundFailure is null &&
                       Volatile.Read(ref transientDegradedReason) is null &&
+                      Volatile.Read(ref captureStatisticsWarning) is null &&
+                      pcapRuntimeInfo?.NativeLibraryPath is not null &&
                       backgroundTask?.IsCompleted != true;
         var newValue = healthy ? 1 : 0;
         var previous = Interlocked.Exchange(ref engineHealthy, newValue);
