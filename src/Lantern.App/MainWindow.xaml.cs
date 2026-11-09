@@ -1740,6 +1740,7 @@ public partial class MainWindow : Window
         SyncWebsiteActivityGroups();
         SyncDomainRuleDevices();
         RefreshDashboardSummary();
+        RefreshEngineHealthDisplay();
         EmptyState.Visibility = Devices.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         DeviceCountText.Text = $"{Devices.Count} device{(Devices.Count == 1 ? string.Empty : "s")}";
     }
@@ -1857,19 +1858,22 @@ public partial class MainWindow : Window
     {
         _ = Dispatcher.InvokeAsync(() =>
         {
-            ApplyEngineState(eventArgs.IsRunning);
+            ApplyEngineState(eventArgs.IsRunning, eventArgs.IsHealthy);
             DetailStatusText.Text = eventArgs.StatusMessage;
+            RefreshEngineHealthDisplay();
         });
     }
 
-    private void ApplyEngineState(bool isRunning)
+    private void ApplyEngineState(bool isRunning, bool isHealthy)
     {
         if (isRunning)
         {
             controlStartedAt ??= DateTimeOffset.UtcNow;
             refreshTimer.Start();
-            TopStatusText.Text = "Active";
-            StatusDot.Fill = new SolidColorBrush(Color.FromRgb(104, 192, 138));
+            TopStatusText.Text = isHealthy ? "Active" : "Degraded";
+            StatusDot.Fill = isHealthy
+                ? new SolidColorBrush(Color.FromRgb(104, 192, 138))
+                : new SolidColorBrush(Color.FromRgb(231, 164, 72));
         }
         else
         {
@@ -1881,7 +1885,57 @@ public partial class MainWindow : Window
         }
 
         UpdateButtons();
+        RefreshEngineHealthDisplay();
         RefreshDashboardSummary(addTrafficSample: false);
+    }
+
+    private void RefreshEngineHealthDisplay()
+    {
+        var snapshot = engine.GetHealthSnapshot();
+        if (!snapshot.IsRunning)
+        {
+            PacketHealthText.Text = "Packet health: idle";
+            return;
+        }
+
+        var nativeName = string.IsNullOrWhiteSpace(snapshot.NativeLibraryPath)
+            ? "native DLL path unavailable"
+            : Path.GetFileName(snapshot.NativeLibraryPath);
+        var queueBytes =
+            $"queues {snapshot.CaptureQueueBytes / 1024:N0}/" +
+            $"{snapshot.ForwardingInjectionQueueBytes / 1024:N0} KiB";
+        var health = snapshot.IsHealthy ? "healthy" : "degraded";
+        var captureAge = snapshot.LastCaptureAtUtc is { } captureAt
+            ? $"{(DateTimeOffset.UtcNow - captureAt).TotalSeconds:N1}s ago"
+            : "no packets observed";
+        var arpAge = snapshot.LastArpInjectionAtUtc is { } arpAt
+            ? $"{(DateTimeOffset.UtcNow - arpAt).TotalSeconds:N1}s ago"
+            : "not sent yet";
+
+        PacketHealthText.Text =
+            $"{health} · {snapshot.CaptureLibraryVersion} · {nativeName} · " +
+            $"rx {snapshot.CaptureReceivedPackets:N0} · kernel drops " +
+            $"{snapshot.CaptureKernelDroppedPackets:N0} · queue drops " +
+            $"{snapshot.CaptureQueueDroppedPackets + snapshot.InjectionQueueDroppedPackets:N0} · " +
+            $"send errors {snapshot.InjectionSendFailures:N0} · retries " +
+            $"{snapshot.InjectionRetryAttempts:N0} · {queueBytes} · " +
+            $"capture {captureAge} · ARP send {arpAge}";
+
+        if (!string.IsNullOrWhiteSpace(snapshot.NativeLibraryError) ||
+            !string.IsNullOrWhiteSpace(snapshot.CaptureStatisticsWarning))
+        {
+            var diagnostic = snapshot.CaptureStatisticsWarning ??
+                             snapshot.NativeLibraryError;
+            PacketHealthText.ToolTip = diagnostic;
+        }
+        else
+        {
+            PacketHealthText.ToolTip =
+                $"SharpPcap {snapshot.SharpPcapVersion}; " +
+                $"native DLL {snapshot.NativeLibraryPath ?? "unverified"} " +
+                $"({snapshot.NativeLibraryFileVersion ?? "version unavailable"}). " +
+                $"Last forwarded injection: {snapshot.LastForwardedInjectionAtUtc?.ToString("O") ?? "not yet"}";
+        }
     }
 
     private void Engine_OnDeviceIdentityLearned(
