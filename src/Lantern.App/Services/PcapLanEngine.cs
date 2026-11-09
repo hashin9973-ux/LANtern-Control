@@ -296,7 +296,8 @@ public sealed class PcapLanEngine : IAsyncDisposable
                             adapter.LocalAddress,
                             adapter.GatewayAddress)),
                     cancellationToken,
-                    OnInjectionRetry);
+                    (attempt, exception) =>
+                        OnInjectionRetry("ARP enforcement", attempt, exception));
 
                 gatewayMac = await gatewayResolution.Task.WaitAsync(
                     TimeSpan.FromSeconds(4),
@@ -1718,7 +1719,8 @@ public sealed class PcapLanEngine : IAsyncDisposable
             await ArpEnforcementRetry.ExecuteAsync(
                 () => SendArpPacketDirect(bytes),
                 cancellationToken,
-                OnInjectionRetry);
+                (attempt, exception) =>
+                    OnInjectionRetry("ARP enforcement", attempt, exception));
             return;
         }
 
