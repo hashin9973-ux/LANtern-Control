@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using System.Net.NetworkInformation;
 using Lantern.Core.Control;
@@ -12,8 +13,12 @@ namespace Lantern.App.Services;
 public sealed class PcapLanEngine : IAsyncDisposable
 {
     private readonly object arpSendSync = new();
+    private const long CaptureQueueMaximumBytes = 32 * 1024 * 1024;
+    private const long ForwardingQueueMaximumBytes = 32 * 1024 * 1024;
+    private const long PriorityQueueMaximumBytes = 1024 * 1024;
+    private static readonly TimeSpan CaptureStatisticsInterval = TimeSpan.FromSeconds(2);
     private readonly SemaphoreSlim refreshSync = new(1, 1);
-    private readonly SemaphoreSlim stopSync = new(1, 1);
+    private readonly SemaphoreSlim lifecycleSync = new(1, 1);
     private readonly TrafficPolicy policy;
     private readonly DeviceRegistry registry;
     private readonly ClientMappingCache clientMappings = new();
@@ -27,6 +32,25 @@ public sealed class PcapLanEngine : IAsyncDisposable
         new(StringComparer.OrdinalIgnoreCase);
     private CancellationTokenSource? engineCancellation;
     private Task? backgroundTask;
+    private BoundedPacketQueue? captureQueue;
+    private PriorityPacketInjectionQueue? injectionQueue;
+    private PcapRuntimeInfo? pcapRuntimeInfo;
+    private string? transientDegradedReason;
+    private string? captureStatisticsWarning;
+    private uint previousCaptureReceived;
+    private uint previousCaptureDropped;
+    private bool captureStatisticsInitialized;
+    private int engineHealthy;
+    private int injectionRetryAttempts;
+    private int injectionSendFailures;
+    private long captureReceivedPackets;
+    private long captureKernelDroppedPackets;
+    private long captureQueueDroppedPackets;
+    private long injectionQueueDroppedPackets;
+    private long lastCaptureUtcTicks;
+    private long lastArpInjectionUtcTicks;
+    private long lastForwardedInjectionUtcTicks;
+    private long lastCaptureStatisticsPollTimestamp;
     private LibPcapLiveDevice? arpDevice;
     private LibPcapLiveDevice? forwardingDevice;
     private AdapterProfile? profile;
@@ -53,7 +77,48 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
     public bool IsRunning => arpDevice is not null || forwardingDevice is not null;
 
+    public bool IsHealthy =>
+        IsRunning &&
+        Volatile.Read(ref engineHealthy) == 1 &&
+        backgroundFailure is null &&
+        Volatile.Read(ref transientDegradedReason) is null &&
+        backgroundTask?.IsCompleted != true;
+
     public bool IsControlling => controlling;
+
+    public PcapEngineHealthSnapshot GetHealthSnapshot()
+    {
+        var runtime = pcapRuntimeInfo;
+        var currentCaptureQueue = captureQueue;
+        var currentInjectionQueue = injectionQueue;
+        return new PcapEngineHealthSnapshot(
+            IsRunning,
+            IsHealthy,
+            backgroundFailure ?? Volatile.Read(ref transientDegradedReason),
+            runtime?.CaptureLibraryVersion ?? "Not loaded",
+            runtime?.SharpPcapVersion ?? "Unknown",
+            runtime?.NativeLibraryPath,
+            runtime?.NativeLibraryFileVersion,
+            Interlocked.Read(ref captureReceivedPackets),
+            Interlocked.Read(ref captureKernelDroppedPackets),
+            Interlocked.Read(ref captureQueueDroppedPackets),
+            Interlocked.Read(ref injectionQueueDroppedPackets),
+            ForwardedPacketCount,
+            DroppedPacketCount,
+            Volatile.Read(ref injectionSendFailures),
+            Volatile.Read(ref injectionRetryAttempts),
+            currentCaptureQueue?.BufferedBytes ?? 0,
+            currentInjectionQueue?.ForwardingQueueBytes ?? 0,
+            currentInjectionQueue?.PriorityQueueBytes ?? 0,
+            ReadTimestamp(Interlocked.Read(ref lastCaptureUtcTicks)),
+            ReadTimestamp(Interlocked.Read(ref lastArpInjectionUtcTicks)),
+            ReadTimestamp(Interlocked.Read(ref lastForwardedInjectionUtcTicks)),
+            Volatile.Read(ref captureStatisticsWarning),
+            runtime?.Error);
+    }
+
+    private static DateTimeOffset? ReadTimestamp(long utcTicks) =>
+        utcTicks <= 0 ? null : new DateTimeOffset(utcTicks, TimeSpan.Zero);
 
     public long ForwardedPacketCount => Interlocked.Read(ref forwardedPacketCount);
 
@@ -98,108 +163,193 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
     public async Task StartAsync(AdapterProfile adapter, CancellationToken cancellationToken)
     {
-        if (IsRunning)
-        {
-            return;
-        }
-
-        await NpfDriverService.EnsureAvailableAsync(cancellationToken);
-        profile = adapter;
-        clientMappings.BeginAdapter(adapter.Id);
-        resolvedNameClaims.Reset(rejectedResolvedNames);
-        resolvingNames.Clear();
-        registry.BeginSession();
-        identityMonitor.Reset();
-        SeedRememberedInventory();
-
-        var clients = clientMappings.Mappings;
-        restoring = false;
-        backgroundFailure = null;
-        Interlocked.Exchange(ref forwardedPacketCount, 0);
-        Interlocked.Exchange(ref droppedPacketCount, 0);
-        gatewayResolution = new TaskCompletionSource<PhysicalAddress>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-
-        var captureDevice = LibPcapLiveDeviceList.Instance
-            .FirstOrDefault(candidate => candidate.MacAddress?.Equals(adapter.LocalMac) == true)
-            ?? throw new InvalidOperationException(
-                $"WinPcap could not match the Windows adapter “{adapter.Name}”.");
-
+        ArgumentNullException.ThrowIfNull(adapter);
+        await lifecycleSync.WaitAsync(cancellationToken);
         try
         {
-            arpDevice = captureDevice;
-            arpDevice.OnPacketArrival += OnArpPacketArrival;
-            arpDevice.Open(PcapCaptureConfiguration.CreateForArpDiscovery());
-            arpDevice.Filter = "arp";
-            arpDevice.StartCapture();
-
-            forwardingDevice = new LibPcapLiveDevice(
-                captureDevice.Interface ??
-                throw new InvalidOperationException("The capture adapter has no interface."));
-            forwardingDevice.Open(PcapCaptureConfiguration.CreateForForwarding());
-            forwardingDevice.Filter = "ip";
-            DriverName = captureDevice.Description ?? captureDevice.Name;
-            RaiseStatus($"Resolving gateway {adapter.GatewayAddress}…");
-
-            SendArpPacket(
-                EthernetFrameCodec.BuildArpRequest(
-                    adapter.LocalMac,
-                    adapter.LocalAddress,
-                    adapter.GatewayAddress));
-
-            gatewayMac = await gatewayResolution.Task.WaitAsync(
-                TimeSpan.FromSeconds(4),
-                cancellationToken);
-            registry.Observe(
-                adapter.GatewayAddress,
-                gatewayMac,
-                DateTimeOffset.UtcNow,
-                "Gateway");
-
-            frameRouter = new FrameRouter(
-                adapter.LocalMac,
-                adapter.LocalAddress,
-                gatewayMac,
-                clients,
-                policy);
-
-            RaiseStatus("Loading devices already observed by Windows…");
-            engineCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            controlling = true;
-            var forwarderStarted = new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously);
-            var forwardingTask = Task.Run(
-                () => RunForwardingLoop(engineCancellation.Token, forwarderStarted));
-            backgroundTask = forwardingTask;
-            await forwarderStarted.Task.WaitAsync(
-                TimeSpan.FromSeconds(2),
-                cancellationToken);
-
-            await RefreshNeighborsAsync(engineCancellation.Token);
-
-            PoisonClients();
-            backgroundTask = Task.WhenAll(
-                forwardingTask,
-                RunMaintenanceAsync(engineCancellation.Token));
-            const string activeMessage =
-                "Live monitoring active — 0 KB/s is unlimited and remains visible.";
-            RaiseStatus(activeMessage);
-            RaiseStateChanged(true, activeMessage);
-        }
-        catch (Exception exception)
-        {
-            var forwardingFailure = backgroundFailure;
-            Interlocked.CompareExchange(
-                ref backgroundFailure,
-                $"Startup failed: {exception.Message}",
-                null);
-            await StopAsync();
-            if (forwardingFailure is not null)
+            if (IsRunning)
             {
-                throw new InvalidOperationException(forwardingFailure, exception);
+                return;
             }
 
-            throw;
+            await NpfDriverService.EnsureAvailableAsync(cancellationToken);
+            profile = adapter;
+            clientMappings.BeginAdapter(adapter.Id);
+            resolvedNameClaims.Reset(rejectedResolvedNames);
+            resolvingNames.Clear();
+            registry.BeginSession();
+            identityMonitor.Reset();
+            SeedRememberedInventory();
+
+            var clients = clientMappings.Mappings;
+            restoring = false;
+            controlling = false;
+            backgroundFailure = null;
+            transientDegradedReason = null;
+            Volatile.Write(ref engineHealthy, 0);
+            Interlocked.Exchange(ref forwardedPacketCount, 0);
+            Interlocked.Exchange(ref droppedPacketCount, 0);
+            Interlocked.Exchange(ref captureReceivedPackets, 0);
+            Interlocked.Exchange(ref captureKernelDroppedPackets, 0);
+            Interlocked.Exchange(ref captureQueueDroppedPackets, 0);
+            Interlocked.Exchange(ref injectionQueueDroppedPackets, 0);
+            Interlocked.Exchange(ref injectionRetryAttempts, 0);
+            Interlocked.Exchange(ref injectionSendFailures, 0);
+            Interlocked.Exchange(ref lastCaptureUtcTicks, 0);
+            Interlocked.Exchange(ref lastArpInjectionUtcTicks, 0);
+            Interlocked.Exchange(ref lastForwardedInjectionUtcTicks, 0);
+            captureStatisticsInitialized = false;
+            captureStatisticsWarning = null;
+            lastCaptureStatisticsPollTimestamp = 0;
+            pcapRuntimeInfo = null;
+            gatewayResolution = new TaskCompletionSource<PhysicalAddress>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var captureDevice = LibPcapLiveDeviceList.Instance
+                .FirstOrDefault(candidate => candidate.MacAddress?.Equals(adapter.LocalMac) == true)
+                ?? throw new InvalidOperationException(
+                    $"WinPcap could not match the Windows adapter “{adapter.Name}”.");
+
+            try
+            {
+                arpDevice = captureDevice;
+                arpDevice.OnPacketArrival += OnArpPacketArrival;
+                arpDevice.Open(PcapCaptureConfiguration.CreateForArpDiscovery());
+                arpDevice.Filter = "arp";
+                arpDevice.StartCapture();
+
+                forwardingDevice = new LibPcapLiveDevice(
+                    captureDevice.Interface ??
+                    throw new InvalidOperationException("The capture adapter has no interface."));
+                forwardingDevice.Open(PcapCaptureConfiguration.CreateForForwarding());
+                forwardingDevice.Filter = "ip";
+                DriverName = captureDevice.Description ?? captureDevice.Name;
+
+                // Force SharpPcap to resolve its native capture library, then record
+                // the actual loaded module path instead of inferring it from installation state.
+                pcapRuntimeInfo = PcapRuntimeInspector.Inspect();
+                if (pcapRuntimeInfo.NativeLibraryPath is null)
+                {
+                    RaiseStatus(
+                        $"Capture library loaded as '{pcapRuntimeInfo.CaptureLibraryVersion}', " +
+                        $"but its native module path could not be verified: {pcapRuntimeInfo.Error}");
+                }
+                else
+                {
+                    RaiseStatus(
+                        $"Using {pcapRuntimeInfo.CaptureLibraryVersion}; native module: " +
+                        $"{pcapRuntimeInfo.NativeLibraryPath}.");
+                }
+
+                RaiseStatus($"Resolving gateway {adapter.GatewayAddress}…");
+                SendArpPacketDirect(
+                    EthernetFrameCodec.BuildArpRequest(
+                        adapter.LocalMac,
+                        adapter.LocalAddress,
+                        adapter.GatewayAddress));
+
+                gatewayMac = await gatewayResolution.Task.WaitAsync(
+                    TimeSpan.FromSeconds(4),
+                    cancellationToken);
+                registry.Observe(
+                    adapter.GatewayAddress,
+                    gatewayMac,
+                    DateTimeOffset.UtcNow,
+                    "Gateway");
+
+                frameRouter = new FrameRouter(
+                    adapter.LocalMac,
+                    adapter.LocalAddress,
+                    gatewayMac,
+                    clients,
+                    policy);
+
+                RaiseStatus("Loading devices already observed by Windows…");
+                engineCancellation = new CancellationTokenSource();
+                captureQueue = new BoundedPacketQueue(CaptureQueueMaximumBytes);
+                injectionQueue = new PriorityPacketInjectionQueue(
+                    ForwardingQueueMaximumBytes,
+                    PriorityQueueMaximumBytes);
+
+                controlling = true;
+                var engineToken = engineCancellation.Token;
+                var forwarderStarted = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+
+                var captureTask = BackgroundLoopSupervisor.RunAsync(
+                    "Npcap capture loop",
+                    () => Task.Run(() => RunForwardingLoop(engineToken, forwarderStarted)),
+                    engineToken,
+                    HandleBackgroundFailure);
+
+                var processingTask = BackgroundLoopSupervisor.RunAsync(
+                    "Packet processing loop",
+                    () => RunPacketProcessingLoopAsync(engineToken),
+                    engineToken,
+                    HandleBackgroundFailure);
+
+                var injectionTask = BackgroundLoopSupervisor.RunAsync(
+                    "Npcap injection loop",
+                    () => injectionQueue.RunAsync(
+                        SendInjectionPacket,
+                        () => controlling && !restoring,
+                        OnInjectionRetry,
+                        HandleBackgroundFailure,
+                        engineToken),
+                    engineToken,
+                    HandleBackgroundFailure);
+
+                var maintenanceTask = BackgroundLoopSupervisor.RunAsync(
+                    "Maintenance loops",
+                    () => RunMaintenanceAsync(engineToken),
+                    engineToken,
+                    HandleBackgroundFailure);
+
+                backgroundTask = Task.WhenAll(
+                    captureTask,
+                    processingTask,
+                    injectionTask,
+                    maintenanceTask);
+
+                await forwarderStarted.Task.WaitAsync(
+                    TimeSpan.FromSeconds(2),
+                    cancellationToken);
+
+                await RefreshNeighborsAsync(cancellationToken);
+                if (backgroundFailure is not null)
+                {
+                    throw new InvalidOperationException(backgroundFailure);
+                }
+
+                PoisonClients();
+                Volatile.Write(ref engineHealthy, 1);
+                const string activeMessage =
+                    "Live monitoring active — packet capture, queue pressure, Npcap drops, " +
+                    "and injection health are being monitored.";
+                RaiseStatus(activeMessage);
+                RaiseStateChanged(true, activeMessage, isHealthy: true);
+            }
+            catch (Exception exception)
+            {
+                var failure = backgroundFailure;
+                Interlocked.CompareExchange(
+                    ref backgroundFailure,
+                    $"Startup failed: {exception.Message}",
+                    null);
+                Volatile.Write(ref engineHealthy, 0);
+                controlling = false;
+                await StopCoreAsync();
+                if (failure is not null)
+                {
+                    throw new InvalidOperationException(failure, exception);
+                }
+
+                throw;
+            }
+        }
+        finally
+        {
+            lifecycleSync.Release();
         }
     }
 
@@ -640,24 +790,39 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
     public async Task StopAsync()
     {
-        await stopSync.WaitAsync();
+        await lifecycleSync.WaitAsync();
         try
         {
-            if (!IsRunning && profile is null)
-            {
-                return;
-            }
+            await StopCoreAsync();
+        }
+        finally
+        {
+            lifecycleSync.Release();
+        }
+    }
 
+    private async Task StopCoreAsync()
+    {
+        if (!IsRunning && profile is null && engineCancellation is null)
+        {
+            return;
+        }
+
+        controlling = false;
+        Volatile.Write(ref engineHealthy, 0);
+
+        // Let an in-flight presence/discovery probe finish before restoration.
+        // Once the semaphore is acquired, no maintenance probe can enqueue ARP
+        // frames ahead of corrective mappings.
+        await refreshSync.WaitAsync();
+        try
+        {
             restoring = true;
             try
             {
                 await ForwardingShutdown.RunAsync(
                     () => arpDevice is null ? Task.CompletedTask : RestoreArpAsync(),
-                    () =>
-                    {
-                        controlling = false;
-                        engineCancellation?.Cancel();
-                    },
+                    () => engineCancellation?.Cancel(),
                     AwaitBackgroundTaskAsync);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
@@ -665,46 +830,48 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 RaiseStatus(
                     $"Network restoration reported an error; closing safely: {exception.Message}");
             }
-
-            if (arpDevice is not null)
-            {
-                try
-                {
-                    arpDevice.StopCapture();
-                }
-                catch (InvalidOperationException)
-                {
-                }
-
-                arpDevice.OnPacketArrival -= OnArpPacketArrival;
-                arpDevice.Close();
-                arpDevice = null;
-            }
-
-            if (forwardingDevice is not null)
-            {
-                forwardingDevice.Close();
-                forwardingDevice = null;
-            }
-
-            engineCancellation?.Dispose();
-            engineCancellation = null;
-            backgroundTask = null;
-            frameRouter = null;
-            gatewayMac = null;
-            profile = null;
-            restoring = false;
-            var failure = backgroundFailure;
-            var stoppedMessage = failure is null
-                ? "Stopped. Corrective ARP mappings were sent."
-                : $"Stopped after an engine error: {failure}. Corrective ARP mappings were sent.";
-            RaiseStatus(stoppedMessage);
-            RaiseStateChanged(false, stoppedMessage, failure);
         }
         finally
         {
-            stopSync.Release();
+            refreshSync.Release();
         }
+
+        if (arpDevice is not null)
+        {
+            try
+            {
+                arpDevice.StopCapture();
+            }
+            catch (InvalidOperationException)
+            {
+            }
+
+            arpDevice.OnPacketArrival -= OnArpPacketArrival;
+            arpDevice.Close();
+            arpDevice = null;
+        }
+
+        if (forwardingDevice is not null)
+        {
+            forwardingDevice.Close();
+            forwardingDevice = null;
+        }
+
+        engineCancellation?.Dispose();
+        engineCancellation = null;
+        backgroundTask = null;
+        captureQueue = null;
+        injectionQueue = null;
+        frameRouter = null;
+        gatewayMac = null;
+        profile = null;
+        restoring = false;
+        var failure = backgroundFailure;
+        var stoppedMessage = failure is null
+            ? "Stopped. Corrective ARP mappings were sent."
+            : $"Stopped after an engine error: {failure}. Corrective ARP mappings were attempted.";
+        RaiseStatus(stoppedMessage);
+        RaiseStateChanged(false, stoppedMessage, failure, isHealthy: false);
     }
 
     public async Task ApplyRuleAsync(string macAddress, TrafficRule rule)
