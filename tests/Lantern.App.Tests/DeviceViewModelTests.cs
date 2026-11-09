@@ -190,7 +190,7 @@ public sealed class DeviceViewModelTests
 
                     var sidebarVersion = Assert.IsType<TextBlock>(
                         window.FindName("SidebarVersionText"));
-                    Assert.Equal("v0.1.11", sidebarVersion.Text);
+                    Assert.Equal("v0.1.12", sidebarVersion.Text);
                     var listLayoutGrid = Assert.IsType<DataGrid>(window.FindName("DeviceGrid"));
                     Assert.True(
                         double.IsPositiveInfinity(listLayoutGrid.MaxHeight),
