@@ -116,6 +116,6 @@ jobs:
 
             Improves live ARP enforcement with bounded retries for transient Npcap send failures and supervised background loops that report faults instead of silently stopping. Also keeps startup discovery passive while retaining explicit device scans.
           generate_release_notes: true
-          files: .\outputs\LANtern-Control-v0.1.13-win-x64.zip
+          files: |\n            .\outputs\LANtern-Control-v0.1.13-win-x64.zip\n            .\outputs\LANtern-Control-Setup-v0.1.13.msi
           fail_on_unmatched_files: true
           make_latest: true
