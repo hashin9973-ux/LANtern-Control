@@ -1898,6 +1898,11 @@ public partial class MainWindow : Window
             return;
         }
 
+        TopStatusText.Text = snapshot.IsHealthy ? "Active" : "Degraded";
+        StatusDot.Fill = snapshot.IsHealthy
+            ? new SolidColorBrush(Color.FromRgb(104, 192, 138))
+            : new SolidColorBrush(Color.FromRgb(231, 164, 72));
+
         var nativeName = string.IsNullOrWhiteSpace(snapshot.NativeLibraryPath)
             ? "native DLL path unavailable"
             : Path.GetFileName(snapshot.NativeLibraryPath);
