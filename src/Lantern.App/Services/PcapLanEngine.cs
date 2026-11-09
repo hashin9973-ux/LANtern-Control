@@ -91,7 +91,11 @@ public sealed class PcapLanEngine : IAsyncDisposable
         this.policy = policy;
     }
 
-    public bool IsRunning => arpDevice is not null || forwardingDevice is not null;
+    public bool IsRunning =>
+        profile is not null ||
+        engineCancellation is not null ||
+        arpDevice is not null ||
+        forwardingDevice is not null;
 
     public bool IsHealthy =>
         IsRunning &&
