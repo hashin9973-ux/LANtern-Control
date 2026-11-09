@@ -81,11 +81,26 @@ jobs:
           Get-FileHash $archive -Algorithm SHA256 | Format-List
         shell: pwsh
 
-      - name: Upload portable build artifact
+      - name: Build Windows MSI installer
+        run: |
+          $ErrorActionPreference = "Stop"
+          dotnet build .\installer\LanternControl.wixproj -c Release -p:InstallerPlatform=x64 -p:PublishDir="$((Resolve-Path .\release).Path)\"
+          if ($LASTEXITCODE -ne 0) { throw "Windows MSI compilation failed." }
+          $builtInstaller = ".\packaging\wix\LANtern-Control-Setup-v0.1.13.msi"
+          $installer = ".\outputs\LANtern-Control-Setup-v0.1.13.msi"
+          if (-not (Test-Path $builtInstaller)) { throw "Compiled MSI is missing: $builtInstaller" }
+          Copy-Item -LiteralPath $builtInstaller -Destination $installer -Force
+          Get-Item $installer | Format-List FullName, Length
+          Get-FileHash $installer -Algorithm SHA256 | Format-List
+        shell: pwsh
+
+      - name: Upload Windows portable and MSI artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: LANtern-Control-v0.1.13-win-x64
-          path: .\outputs\LANtern-Control-v0.1.13-win-x64.zip
+          name: LANtern-Control-v0.1.13-Windows-x64
+          path: |
+            .\outputs\LANtern-Control-v0.1.13-win-x64.zip
+            .\outputs\LANtern-Control-Setup-v0.1.13.msi
           if-no-files-found: error
           retention-days: 30
 
@@ -97,7 +112,7 @@ jobs:
           target_commitish: master
           name: LANtern Control v0.1.13
           body: |
-            Windows x64 portable build.
+            Windows x64 portable ZIP and MSI installer.
 
             Improves live ARP enforcement with bounded retries for transient Npcap send failures and supervised background loops that report faults instead of silently stopping. Also keeps startup discovery passive while retaining explicit device scans.
           generate_release_notes: true
