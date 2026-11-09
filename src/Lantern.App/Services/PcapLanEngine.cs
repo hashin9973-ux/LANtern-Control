@@ -46,6 +46,21 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private int injectionSendFailures;
     private long captureReceivedPackets;
     private long captureKernelDroppedPackets;
+    private long captureBytes;
+    private long forwardedBytes;
+    private long capturePacketsPerSecondMilli;
+    private long captureBytesPerSecond;
+    private long forwardedPacketsPerSecondMilli;
+    private long forwardedBytesPerSecond;
+    private long processCpuMilliPercent;
+    private long lastCaptureStatisticsTimestamp;
+    private long previousCaptureBytesSample;
+    private long previousForwardedPacketsSample;
+    private long previousForwardedBytesSample;
+    private long previousProcessCpuTicks;
+    private long previousProcessCpuTimestamp;
+    private long lastArpQueueLatencyTicks;
+    private long lastForwardingQueueLatencyTicks;
     private long captureQueueDroppedPackets;
     private long injectionQueueDroppedPackets;
     private long lastCaptureUtcTicks;
@@ -112,6 +127,13 @@ public sealed class PcapLanEngine : IAsyncDisposable
             currentCaptureQueue?.BufferedBytes ?? 0,
             currentInjectionQueue?.ForwardingQueueBytes ?? 0,
             currentInjectionQueue?.PriorityQueueBytes ?? 0,
+            Interlocked.Read(ref capturePacketsPerSecondMilli) / 1000d,
+            Interlocked.Read(ref captureBytesPerSecond),
+            Interlocked.Read(ref forwardedPacketsPerSecondMilli) / 1000d,
+            Interlocked.Read(ref forwardedBytesPerSecond),
+            Interlocked.Read(ref processCpuMilliPercent) / 1000d,
+            TimeSpan.FromTicks(Interlocked.Read(ref lastArpQueueLatencyTicks)).TotalMilliseconds,
+            TimeSpan.FromTicks(Interlocked.Read(ref lastForwardingQueueLatencyTicks)).TotalMilliseconds,
             ReadTimestamp(Interlocked.Read(ref lastCaptureUtcTicks)),
             ReadTimestamp(Interlocked.Read(ref lastArpInjectionUtcTicks)),
             ReadTimestamp(Interlocked.Read(ref lastForwardedInjectionUtcTicks)),
@@ -193,6 +215,21 @@ public sealed class PcapLanEngine : IAsyncDisposable
             Interlocked.Exchange(ref droppedPacketCount, 0);
             Interlocked.Exchange(ref captureReceivedPackets, 0);
             Interlocked.Exchange(ref captureKernelDroppedPackets, 0);
+            Interlocked.Exchange(ref captureBytes, 0);
+            Interlocked.Exchange(ref forwardedBytes, 0);
+            Interlocked.Exchange(ref capturePacketsPerSecondMilli, 0);
+            Interlocked.Exchange(ref captureBytesPerSecond, 0);
+            Interlocked.Exchange(ref forwardedPacketsPerSecondMilli, 0);
+            Interlocked.Exchange(ref forwardedBytesPerSecond, 0);
+            Interlocked.Exchange(ref processCpuMilliPercent, 0);
+            Interlocked.Exchange(ref lastArpQueueLatencyTicks, 0);
+            Interlocked.Exchange(ref lastForwardingQueueLatencyTicks, 0);
+            lastCaptureStatisticsTimestamp = 0;
+            previousCaptureBytesSample = 0;
+            previousForwardedPacketsSample = 0;
+            previousForwardedBytesSample = 0;
+            previousProcessCpuTicks = 0;
+            previousProcessCpuTimestamp = 0;
             Interlocked.Exchange(ref captureQueueDroppedPackets, 0);
             Interlocked.Exchange(ref injectionQueueDroppedPackets, 0);
             Interlocked.Exchange(ref injectionRetryAttempts, 0);
@@ -986,6 +1023,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             }
 
             Interlocked.Exchange(ref lastCaptureUtcTicks, DateTimeOffset.UtcNow.UtcTicks);
+            Interlocked.Add(ref captureBytes, capture.Data.Length);
             if (!controlling || restoring)
             {
                 continue;
@@ -1067,10 +1105,14 @@ public sealed class PcapLanEngine : IAsyncDisposable
                     () =>
                     {
                         Interlocked.Increment(ref forwardedPacketCount);
+                        Interlocked.Add(
+                            ref forwardedBytes,
+                            frames.Sum(static frame => (long)frame.Length));
                         Interlocked.Exchange(
                             ref lastForwardedInjectionUtcTicks,
                             DateTimeOffset.UtcNow.UtcTicks);
-                    }))
+                    },
+                    RecordForwardingQueueLatency))
             {
                 Interlocked.Increment(ref injectionQueueDroppedPackets);
                 Interlocked.Increment(ref droppedPacketCount);
@@ -1110,9 +1152,13 @@ public sealed class PcapLanEngine : IAsyncDisposable
                     unchecked((uint)(dropped - previousCaptureDropped)));
             }
 
+            var newlyReceived = firstStatisticsSample
+                ? received
+                : unchecked((uint)(received - previousCaptureReceived));
             var newlyDropped = firstStatisticsSample
                 ? dropped
                 : unchecked((uint)(dropped - previousCaptureDropped));
+            UpdatePerformanceMetrics(newlyReceived);
             previousCaptureReceived = received;
             previousCaptureDropped = dropped;
             Volatile.Write(ref captureStatisticsWarning, null);
@@ -1585,7 +1631,10 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
         try
         {
-            activeQueue.EnqueuePriority(bytes, RecordArpInjectionSuccess);
+            activeQueue.EnqueuePriority(
+            bytes,
+            RecordArpInjectionSuccess,
+            RecordArpQueueLatency);
         }
         catch (InvalidOperationException exception)
         {
@@ -1613,7 +1662,8 @@ public sealed class PcapLanEngine : IAsyncDisposable
             await activeQueue.SendPriorityAsync(
                 bytes,
                 cancellationToken,
-                RecordArpInjectionSuccess);
+                RecordArpInjectionSuccess,
+                RecordArpQueueLatency);
         }
         catch (InvalidOperationException exception)
         {
@@ -1669,6 +1719,83 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
     private void RecordArpInjectionSuccess() =>
         Interlocked.Exchange(ref lastArpInjectionUtcTicks, DateTimeOffset.UtcNow.UtcTicks);
+
+    private void RecordArpQueueLatency(TimeSpan latency) =>
+        Interlocked.Exchange(ref lastArpQueueLatencyTicks, latency.Ticks);
+
+    private void RecordForwardingQueueLatency(TimeSpan latency) =>
+        Interlocked.Exchange(ref lastForwardingQueueLatencyTicks, latency.Ticks);
+
+    private void UpdatePerformanceMetrics(uint newlyReceivedPackets)
+    {
+        var now = Stopwatch.GetTimestamp();
+        var elapsedSeconds = lastCaptureStatisticsTimestamp == 0
+            ? 0
+            : Stopwatch.GetElapsedTime(lastCaptureStatisticsTimestamp, now).TotalSeconds;
+        lastCaptureStatisticsTimestamp = now;
+
+        var currentCaptureBytes = Interlocked.Read(ref captureBytes);
+        var currentForwardedPackets = ForwardedPacketCount;
+        var currentForwardedBytes = Interlocked.Read(ref forwardedBytes);
+
+        if (elapsedSeconds > 0)
+        {
+            var captureByteDelta = Math.Max(0, currentCaptureBytes - previousCaptureBytesSample);
+            var forwardedPacketDelta = Math.Max(0, currentForwardedPackets - previousForwardedPacketsSample);
+            var forwardedByteDelta = Math.Max(0, currentForwardedBytes - previousForwardedBytesSample);
+
+            Interlocked.Exchange(
+                ref capturePacketsPerSecondMilli,
+                (long)(newlyReceivedPackets / elapsedSeconds * 1000));
+            Interlocked.Exchange(
+                ref captureBytesPerSecond,
+                (long)(captureByteDelta / elapsedSeconds));
+            Interlocked.Exchange(
+                ref forwardedPacketsPerSecondMilli,
+                (long)(forwardedPacketDelta / elapsedSeconds * 1000));
+            Interlocked.Exchange(
+                ref forwardedBytesPerSecond,
+                (long)(forwardedByteDelta / elapsedSeconds));
+        }
+
+        previousCaptureBytesSample = currentCaptureBytes;
+        previousForwardedPacketsSample = currentForwardedPackets;
+        previousForwardedBytesSample = currentForwardedBytes;
+
+        try
+        {
+            using var process = Process.GetCurrentProcess();
+            var currentCpuTicks = process.TotalProcessorTime.Ticks;
+            if (previousProcessCpuTimestamp != 0)
+            {
+                var wallSeconds = Stopwatch.GetElapsedTime(
+                    previousProcessCpuTimestamp,
+                    now).TotalSeconds;
+                var cpuSeconds = Math.Max(
+                    0,
+                    currentCpuTicks - previousProcessCpuTicks) /
+                    (double)TimeSpan.TicksPerSecond;
+                if (wallSeconds > 0)
+                {
+                    var cpuPercent = Math.Clamp(
+                        cpuSeconds / (wallSeconds * Environment.ProcessorCount) * 100,
+                        0,
+                        100);
+                    Interlocked.Exchange(
+                        ref processCpuMilliPercent,
+                        (long)(cpuPercent * 1000));
+                }
+            }
+
+            previousProcessCpuTicks = currentCpuTicks;
+            previousProcessCpuTimestamp = now;
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            RaiseStatus($"LANtern process CPU usage is unavailable: {exception.Message}");
+        }
+    }
 
     private async Task AwaitBackgroundTaskAsync()
     {
