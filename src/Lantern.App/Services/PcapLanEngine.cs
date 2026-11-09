@@ -740,9 +740,16 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
     private void OnArpPacketArrival(object sender, PacketCapture capture)
     {
-        if (EthernetFrameCodec.TryParseArp(capture.Data, out var arp))
+        try
         {
-            ObserveArp(arp);
+            if (EthernetFrameCodec.TryParseArp(capture.Data, out var arp))
+            {
+                ObserveArp(arp);
+            }
+        }
+        catch (Exception exception) when (!restoring)
+        {
+            HandleBackgroundFailure("ARP packet handling failed", exception);
         }
     }
 
@@ -964,22 +971,28 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
     private Task RunMaintenanceAsync(CancellationToken cancellationToken) =>
         Task.WhenAll(
-            RunPoisonLoopAsync(cancellationToken),
-            RunPresenceProbeLoopAsync(cancellationToken));
+            BackgroundLoopSupervisor.RunAsync(
+                "ARP enforcement loop",
+                () => RunPoisonLoopAsync(cancellationToken),
+                cancellationToken,
+                HandleBackgroundFailure),
+            BackgroundLoopSupervisor.RunAsync(
+                "Device presence loop",
+                () => RunPresenceProbeLoopAsync(cancellationToken),
+                cancellationToken,
+                HandleBackgroundFailure));
 
     private async Task RunPoisonLoopAsync(CancellationToken cancellationToken)
     {
-        var poisonTimer = new PeriodicTimer(TimeSpan.FromSeconds(5));
-        try
+        using var poisonTimer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        while (await poisonTimer.WaitForNextTickAsync(cancellationToken))
         {
-            while (await poisonTimer.WaitForNextTickAsync(cancellationToken))
-            {
-                PoisonClients();
-            }
-        }
-        finally
-        {
-            poisonTimer.Dispose();
+            await ArpEnforcementRetry.ExecuteAsync(
+                PoisonClients,
+                cancellationToken,
+                (attempt, exception) => RaiseStatus(
+                    $"ARP enforcement packet send failed; retrying attempt " +
+                    $"{attempt}/{ArpEnforcementRetry.MaxAttempts}: {exception.Message}"));
         }
     }
     private async Task RunPresenceProbeLoopAsync(CancellationToken cancellationToken)
@@ -1201,9 +1214,20 @@ public sealed class PcapLanEngine : IAsyncDisposable
     {
         var activeDevice = arpDevice ??
             throw new InvalidOperationException("The ARP capture adapter is not open.");
-        lock (arpSendSync)
+        try
         {
-            activeDevice.SendPacket(bytes);
+            lock (arpSendSync)
+            {
+                activeDevice.SendPacket(bytes);
+            }
+        }
+        catch (Exception exception)
+        {
+            var adapterName = profile?.Name ?? "unknown adapter";
+            throw new InvalidOperationException(
+                $"Npcap rejected an ARP enforcement packet on '{adapterName}' " +
+                $"({bytes.Length} bytes): {exception.Message}",
+                exception);
         }
     }
 
@@ -1267,7 +1291,11 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private void HandleBackgroundFailure(string source, Exception exception)
     {
         var failure = $"{source}: {exception.Message}";
-        Interlocked.CompareExchange(ref backgroundFailure, failure, null);
+        if (Interlocked.CompareExchange(ref backgroundFailure, failure, null) is not null)
+        {
+            return;
+        }
+
         RaiseStatus($"{failure}; restoring the network.");
         engineCancellation?.Cancel();
         _ = Task.Run(StopAsync);
