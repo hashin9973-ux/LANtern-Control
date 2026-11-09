@@ -25,6 +25,6 @@ public sealed class PcapCaptureConfigurationTests
         Assert.Equal(100, configuration.ReadTimeout);
         Assert.Equal(8 * 1024 * 1024, configuration.BufferSize);
         Assert.Equal(8 * 1024 * 1024, configuration.KernelBufferSize);
-        Assert.Equal(0, configuration.MinToCopy);
+        Assert.Null(configuration.MinToCopy);
     }
 }
