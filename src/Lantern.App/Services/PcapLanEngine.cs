@@ -924,52 +924,85 @@ public sealed class PcapLanEngine : IAsyncDisposable
         CancellationToken cancellationToken,
         TaskCompletionSource forwarderStarted)
     {
-        try
+        var activeDevice = forwardingDevice ??
+            throw new InvalidOperationException("The forwarding adapter is not open.");
+        var activeQueue = captureQueue ??
+            throw new InvalidOperationException("The capture processing queue is not available.");
+        var startupReported = false;
+        var nextStatisticsPoll = Stopwatch.GetTimestamp();
+
+        while (!cancellationToken.IsCancellationRequested)
         {
-            var activeDevice = forwardingDevice ??
-                throw new InvalidOperationException("The forwarding adapter is not open.");
-            var startupReported = false;
-            while (!cancellationToken.IsCancellationRequested)
+            var status = activeDevice.GetNextPacket(out var capture);
+            if (!startupReported)
             {
-                var status = activeDevice.GetNextPacket(out var capture);
-                if (!startupReported)
-                {
-                    ForwarderStartupPolicy.ObserveFirstRead(
-                        forwarderStarted,
-                        status,
-                        activeDevice.LastError);
-                    startupReported = true;
-                }
+                ForwarderStartupPolicy.ObserveFirstRead(
+                    forwarderStarted,
+                    status,
+                    activeDevice.LastError);
+                startupReported = true;
+            }
 
-                if (status == GetPacketStatus.ReadTimeout)
-                {
-                    continue;
-                }
+            var now = Stopwatch.GetTimestamp();
+            if (now >= nextStatisticsPoll)
+            {
+                PollCaptureStatistics(activeDevice);
+                nextStatisticsPoll = now +
+                    (long)(CaptureStatisticsInterval.TotalSeconds * Stopwatch.Frequency);
+            }
 
-                if (status == GetPacketStatus.Error)
-                {
-                    throw new InvalidOperationException(
-                        $"Packet forwarding stopped: {activeDevice.LastError}");
-                }
+            if (status == GetPacketStatus.ReadTimeout)
+            {
+                continue;
+            }
 
-                if (status != GetPacketStatus.PacketRead)
-                {
-                    continue;
-                }
+            if (status == GetPacketStatus.Error)
+            {
+                throw new InvalidOperationException(
+                    $"Packet capture stopped: {activeDevice.LastError}");
+            }
 
-                ProcessForwardingFrame(capture.Data);
+            if (status != GetPacketStatus.PacketRead)
+            {
+                continue;
+            }
+
+            Interlocked.Exchange(ref lastCaptureUtcTicks, DateTimeOffset.UtcNow.UtcTicks);
+            if (!controlling || restoring)
+            {
+                continue;
+            }
+
+            if (!activeQueue.TryWrite(capture.Data))
+            {
+                Interlocked.Increment(ref captureQueueDroppedPackets);
+                Interlocked.Increment(ref droppedPacketCount);
+                SetTransientDegraded(
+                    "Capture processing queue is full; packets are being dropped rather than queued without limit.");
             }
         }
-        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+    }
+
+    private async Task RunPacketProcessingLoopAsync(CancellationToken cancellationToken)
+    {
+        var activeQueue = captureQueue ??
+            throw new InvalidOperationException("The capture processing queue is not available.");
+
+        while (true)
         {
-            forwarderStarted.TrySetException(exception);
-            HandleBackgroundFailure("Forwarding failed", exception);
+            var packet = await activeQueue.ReadAsync(cancellationToken);
+            if (controlling && !restoring)
+            {
+                ProcessForwardingFrame(packet);
+            }
+
+            RefreshQueueHealth();
         }
     }
 
     private void ProcessForwardingFrame(ReadOnlySpan<byte> bytes)
     {
-        if (!controlling || frameRouter is null)
+        if (!controlling || restoring || frameRouter is null)
         {
             return;
         }
@@ -1008,12 +1041,160 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
         if (result.Action == FrameAction.Forward && result.Frame is not null)
         {
-            SendForwardingPacket(result.Frame);
-            Interlocked.Increment(ref forwardedPacketCount);
+            var activeQueue = injectionQueue ??
+                throw new InvalidOperationException("The packet injection queue is not available.");
+            var frames = PacketInjectionPolicy.PrepareFrames(result.Frame);
+            if (!activeQueue.TryEnqueueForwarding(
+                    frames,
+                    () =>
+                    {
+                        Interlocked.Increment(ref forwardedPacketCount);
+                        Interlocked.Exchange(
+                            ref lastForwardedInjectionUtcTicks,
+                            DateTimeOffset.UtcNow.UtcTicks);
+                    }))
+            {
+                Interlocked.Increment(ref injectionQueueDroppedPackets);
+                Interlocked.Increment(ref droppedPacketCount);
+                SetTransientDegraded(
+                    "Forwarding injection queue is full; forwarded packets are being dropped to preserve bounded memory.");
+            }
         }
         else if (result.Action == FrameAction.Drop)
         {
             Interlocked.Increment(ref droppedPacketCount);
+        }
+    }
+
+    private void PollCaptureStatistics(LibPcapLiveDevice activeDevice)
+    {
+        try
+        {
+            var statistics = activeDevice.Statistics ??
+                throw new InvalidOperationException("Npcap did not return capture statistics.");
+            var received = statistics.ReceivedPackets;
+            var dropped = statistics.DroppedPackets;
+
+            if (!captureStatisticsInitialized)
+            {
+                Interlocked.Add(ref captureReceivedPackets, received);
+                Interlocked.Add(ref captureKernelDroppedPackets, dropped);
+                captureStatisticsInitialized = true;
+            }
+            else
+            {
+                Interlocked.Add(
+                    ref captureReceivedPackets,
+                    unchecked((uint)(received - previousCaptureReceived)));
+                Interlocked.Add(
+                    ref captureKernelDroppedPackets,
+                    unchecked((uint)(dropped - previousCaptureDropped)));
+            }
+
+            var newlyDropped = captureStatisticsInitialized
+                ? unchecked((uint)(dropped - previousCaptureDropped))
+                : dropped;
+            previousCaptureReceived = received;
+            previousCaptureDropped = dropped;
+            Volatile.Write(ref captureStatisticsWarning, null);
+
+            if (newlyDropped > 0)
+            {
+                SetTransientDegraded(
+                    $"Npcap reported {newlyDropped} capture-buffer drop(s) in the latest statistics interval.");
+            }
+            else
+            {
+                ClearTransientDegraded("Npcap reported");
+            }
+        }
+        catch (Exception exception)
+        {
+            Volatile.Write(
+                ref captureStatisticsWarning,
+                $"Npcap capture statistics are unavailable: {exception.Message}");
+            RaiseStatus(Volatile.Read(ref captureStatisticsWarning)!);
+        }
+    }
+
+    private void OnInjectionRetry(string operation, int attempt, Exception exception)
+    {
+        Interlocked.Increment(ref injectionRetryAttempts);
+        RaiseStatus(
+            $"{operation} packet injection had a transient error; retry {attempt}/" +
+            $"{ArpEnforcementRetry.MaxAttempts}: {exception.Message}");
+    }
+
+    private void SetTransientDegraded(string reason)
+    {
+        var previous = Interlocked.CompareExchange(ref transientDegradedReason, reason, null);
+        if (previous is not null)
+        {
+            return;
+        }
+
+        Volatile.Write(ref engineHealthy, 0);
+        RaiseStatus($"Packet processing health degraded: {reason}");
+        RaiseStateChanged(
+            IsRunning,
+            $"Packet processing health degraded: {reason}",
+            isHealthy: false);
+    }
+
+    private void ClearTransientDegraded(string expectedPrefix)
+    {
+        var current = Volatile.Read(ref transientDegradedReason);
+        if (current is null ||
+            !current.StartsWith(expectedPrefix, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (Interlocked.CompareExchange(ref transientDegradedReason, null, current) == current)
+        {
+            RefreshEngineHealth();
+        }
+    }
+
+    private void RefreshQueueHealth()
+    {
+        var currentCaptureQueue = captureQueue;
+        var currentInjectionQueue = injectionQueue;
+        var degraded = Volatile.Read(ref transientDegradedReason);
+        if (degraded is null)
+        {
+            return;
+        }
+
+        if (degraded.StartsWith("Capture processing queue", StringComparison.Ordinal) &&
+            currentCaptureQueue is not null &&
+            currentCaptureQueue.BufferedBytes <= CaptureQueueMaximumBytes / 4)
+        {
+            ClearTransientDegraded("Capture processing queue");
+        }
+        else if (degraded.StartsWith("Forwarding injection queue", StringComparison.Ordinal) &&
+                 currentInjectionQueue is not null &&
+                 currentInjectionQueue.ForwardingQueueBytes <= ForwardingQueueMaximumBytes / 4)
+        {
+            ClearTransientDegraded("Forwarding injection queue");
+        }
+    }
+
+    private void RefreshEngineHealth()
+    {
+        var healthy = IsRunning &&
+                      backgroundFailure is null &&
+                      Volatile.Read(ref transientDegradedReason) is null &&
+                      backgroundTask?.IsCompleted != true;
+        var newValue = healthy ? 1 : 0;
+        var previous = Interlocked.Exchange(ref engineHealthy, newValue);
+        if (previous != newValue)
+        {
+            var message = healthy
+                ? "Packet capture and processing queues recovered; enforcement health is restored."
+                : "Packet processing health is degraded.";
+            RaiseStatus(message);
+            RaiseStateChanged(IsRunning, message, isHealthy: healthy);
         }
     }
 
@@ -1154,21 +1335,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
         using var poisonTimer = new PeriodicTimer(TimeSpan.FromSeconds(5));
         while (await poisonTimer.WaitForNextTickAsync(cancellationToken))
         {
-            var retryCount = 0;
-            await ArpEnforcementRetry.ExecuteAsync(
-                PoisonClients,
-                cancellationToken,
-                (attempt, exception) =>
-                {
-                    retryCount++;
-                    RaiseStatus(
-                        $"ARP enforcement packet send failed; retrying attempt " +
-                        $"{attempt}/{ArpEnforcementRetry.MaxAttempts}: {exception.Message}");
-                });
-            if (retryCount > 0)
-            {
-                RaiseStatus($"ARP enforcement recovered after {retryCount} retry attempt(s).");
-            }
+            PoisonClients();
         }
     }
     private async Task RunPresenceProbeLoopAsync(CancellationToken cancellationToken)
@@ -1231,7 +1398,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
         {
             foreach (var pair in clients)
             {
-                SendRestoreFrames(pair, activeProfile, activeGatewayMac);
+                await SendRestoreFramesAsync(pair, activeProfile, activeGatewayMac);
             }
 
             await Task.Delay(120);
@@ -1301,7 +1468,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 return;
             }
 
-            SendRestoreFrames(client, activeProfile, activeGatewayMac);
+            await SendRestoreFramesAsync(client, activeProfile, activeGatewayMac);
             PoisonClient(client);
             if (attempt < 2)
             {
@@ -1310,7 +1477,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
         }
     }
 
-    private void SendRestoreFrames(
+    private async Task SendRestoreFramesAsync(
         KeyValuePair<IPAddress, PhysicalAddress> client,
         AdapterProfile activeProfile,
         PhysicalAddress activeGatewayMac)
@@ -1321,8 +1488,8 @@ public sealed class PcapLanEngine : IAsyncDisposable
             activeGatewayMac,
             client.Key,
             client.Value);
-        SendArpPacket(restoreFrames.ToClient);
-        SendArpPacket(restoreFrames.ToGateway);
+        await SendArpPacketAsync(restoreFrames.ToClient);
+        await SendArpPacketAsync(restoreFrames.ToGateway);
 
         // Also ask a connected client to answer the gateway itself. The direct
         // replies above cover clients that disconnected before restoration.
@@ -1332,7 +1499,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             activeProfile.GatewayAddress,
             client.Value,
             client.Key);
-        SendArpPacket(recoveryRequest);
+        await SendArpPacketAsync(recoveryRequest);
     }
 
     private void RespondToArpRequest(ArpFrameInfo request)
@@ -1388,6 +1555,35 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
     private void SendArpPacket(byte[] bytes)
     {
+        var activeQueue = injectionQueue;
+        if (activeQueue is null)
+        {
+            SendArpPacketDirect(bytes);
+            return;
+        }
+
+        activeQueue.EnqueuePriority(bytes, RecordArpInjectionSuccess);
+    }
+
+    private async Task SendArpPacketAsync(
+        byte[] bytes,
+        CancellationToken cancellationToken = default)
+    {
+        var activeQueue = injectionQueue;
+        if (activeQueue is null)
+        {
+            SendArpPacketDirect(bytes);
+            return;
+        }
+
+        await activeQueue.SendPriorityAsync(
+            bytes,
+            cancellationToken,
+            RecordArpInjectionSuccess);
+    }
+
+    private void SendArpPacketDirect(byte[] bytes)
+    {
         var activeDevice = arpDevice ??
             throw new InvalidOperationException("The ARP capture adapter is not open.");
         try
@@ -1396,44 +1592,62 @@ public sealed class PcapLanEngine : IAsyncDisposable
             {
                 activeDevice.SendPacket(bytes);
             }
+
+            RecordArpInjectionSuccess();
         }
         catch (Exception exception)
         {
             var adapterName = profile?.Name ?? "unknown adapter";
+            Interlocked.Increment(ref injectionSendFailures);
             throw new InvalidOperationException(
-                $"Npcap rejected an ARP enforcement packet on '{adapterName}' " +
+                $"Npcap rejected an ARP packet on '{adapterName}' " +
                 $"({bytes.Length} bytes): {exception.Message}",
                 exception);
         }
     }
 
-    private void SendForwardingPacket(byte[] bytes)
+    private void SendInjectionPacket(byte[] bytes)
     {
-        // Some Wi-Fi drivers allow a second Npcap handle to capture but reject
-        // packet injection through it with ERROR_BAD_UNIT (20). The ARP handle
-        // has already proven that it can inject on this adapter, and capture
-        // filters do not restrict packets sent through a handle.
+        // Some Wi-Fi drivers accept injection only through the established ARP
+        // handle. All post-start sends are serialized by this dedicated worker,
+        // so forwarding can no longer hold the send lock ahead of ARP refreshes.
         var activeDevice = PacketInjectionPolicy.SelectHandle(arpDevice, forwardingDevice);
-        var frames = PacketInjectionPolicy.PrepareFrames(bytes);
-        for (var index = 0; index < frames.Count; index++)
+        try
         {
-            var frame = frames[index];
-            try
-            {
-                lock (arpSendSync)
-                {
-                    activeDevice.SendPacket(frame);
-                }
-            }
-            catch (Exception exception)
-            {
-                var adapterName = profile?.Name ?? "unknown adapter";
-                throw new InvalidOperationException(
-                    $"Npcap rejected a forwarded frame on '{adapterName}' " +
-                    $"(captured {bytes.Length} bytes, sending {frame.Length} bytes, " +
-                    $"segment {index + 1}/{frames.Count}): {exception.Message}",
-                    exception);
-            }
+            activeDevice.SendPacket(bytes);
+        }
+        catch (Exception exception)
+        {
+            Interlocked.Increment(ref injectionSendFailures);
+            var adapterName = profile?.Name ?? "unknown adapter";
+            throw new InvalidOperationException(
+                $"Npcap rejected a packet on '{adapterName}' ({bytes.Length} bytes): " +
+                $"{exception.Message}",
+                exception);
+        }
+    }
+
+    private void RecordArpInjectionSuccess() =>
+        Interlocked.Exchange(ref lastArpInjectionUtcTicks, DateTimeOffset.UtcNow.UtcTicks);
+
+    private void RecordArpInjectionSuccess() =>
+        Interlocked.Exchange(ref lastArpInjectionUtcTicks, DateTimeOffset.UtcNow.UtcTicks);
+
+    private void SendInjectionPacket(byte[] bytes)
+    {
+        var activeDevice = PacketInjectionPolicy.SelectHandle(arpDevice, forwardingDevice);
+        try
+        {
+            activeDevice.SendPacket(bytes);
+        }
+        catch (Exception exception)
+        {
+            Interlocked.Increment(ref injectionSendFailures);
+            var adapterName = profile?.Name ?? "unknown adapter";
+            throw new InvalidOperationException(
+                $"Npcap rejected a packet on '{adapterName}' ({bytes.Length} bytes): " +
+                $"{exception.Message}",
+                exception);
         }
     }
 
@@ -1466,15 +1680,34 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
     private void HandleBackgroundFailure(string source, Exception exception)
     {
-        var failure = $"{source}: {exception.Message}";
+        var failure = $"{source}: {exception}";
         if (Interlocked.CompareExchange(ref backgroundFailure, failure, null) is not null)
         {
             return;
         }
 
-        RaiseStatus($"{failure}; restoring the network.");
-        engineCancellation?.Cancel();
-        _ = Task.Run(StopAsync);
+        controlling = false;
+        Volatile.Write(ref engineHealthy, 0);
+        RaiseStatus($"{failure}; enforcement is degraded and a serialized network restoration is starting.");
+        RaiseStateChanged(
+            IsRunning,
+            $"{source} failed. Control is no longer enforcing policy; restoring network connectivity.",
+            failure,
+            isHealthy: false);
+
+        // Do not cancel or dispose the lifetime token from this callback. The
+        // lifecycle gate serializes the ensuing shutdown with an in-progress start.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await StopAsync();
+            }
+            catch (Exception stopException)
+            {
+                RaiseStatus($"Automatic safe shutdown failed: {stopException}");
+            }
+        });
     }
 
     private void RaiseStatus(string message) => StatusChanged?.Invoke(this, message);
@@ -1482,11 +1715,13 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private void RaiseStateChanged(
         bool isRunning,
         string statusMessage,
-        string? failureMessage = null) =>
+        string? failureMessage = null,
+        bool? isHealthy = null) =>
         StateChanged?.Invoke(
             this,
             new PcapEngineStateChangedEventArgs(
                 isRunning,
                 statusMessage,
-                failureMessage));
+                failureMessage,
+                isHealthy));
 }
