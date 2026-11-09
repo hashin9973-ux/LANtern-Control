@@ -51,7 +51,6 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private long lastCaptureUtcTicks;
     private long lastArpInjectionUtcTicks;
     private long lastForwardedInjectionUtcTicks;
-    private long lastCaptureStatisticsPollTimestamp;
     private LibPcapLiveDevice? arpDevice;
     private LibPcapLiveDevice? forwardingDevice;
     private AdapterProfile? profile;
@@ -201,7 +200,6 @@ public sealed class PcapLanEngine : IAsyncDisposable
             Interlocked.Exchange(ref lastForwardedInjectionUtcTicks, 0);
             captureStatisticsInitialized = false;
             captureStatisticsWarning = null;
-            lastCaptureStatisticsPollTimestamp = 0;
             pcapRuntimeInfo = null;
             gatewayResolution = new TaskCompletionSource<PhysicalAddress>(
                 TaskCreationOptions.RunContinuationsAsynchronously);
