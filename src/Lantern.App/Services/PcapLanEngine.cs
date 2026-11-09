@@ -887,6 +887,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
         // Let an in-flight presence/discovery probe finish before restoration.
         // Once the semaphore is acquired, no maintenance probe can enqueue ARP
         // frames ahead of corrective mappings.
+        var shutdownWarnings = new List<string>();
         await refreshSync.WaitAsync();
         try
         {
@@ -898,17 +899,18 @@ public sealed class PcapLanEngine : IAsyncDisposable
                     () => engineCancellation?.Cancel(),
                     AwaitBackgroundTaskAsync);
             }
-            catch (Exception exception) when (exception is not OperationCanceledException)
+            catch (Exception exception)
             {
+                var warning = $"Network restoration failed: {exception.Message}";
+                shutdownWarnings.Add(warning);
                 diagnosticLog.Write(
                     "network.restoration-failed",
                     "ARP restoration",
                     profile?.Name,
                     "degraded",
-                    "Network restoration failed; handles will still be closed safely.",
+                    "Network restoration failed; handle cleanup will continue.",
                     exception);
-                RaiseStatus(
-                    $"Network restoration reported an error; closing safely: {exception.Message}");
+                RaiseStatus($"{warning}; closing capture handles safely.");
             }
         }
         finally
@@ -916,24 +918,31 @@ public sealed class PcapLanEngine : IAsyncDisposable
             refreshSync.Release();
         }
 
-        if (arpDevice is not null)
+        var activeArpDevice = arpDevice;
+        if (activeArpDevice is not null)
         {
-            try
-            {
-                arpDevice.StopCapture();
-            }
-            catch (InvalidOperationException)
-            {
-            }
-
-            arpDevice.OnPacketArrival -= OnArpPacketArrival;
-            arpDevice.Close();
+            AttemptDeviceCleanup(
+                "ARP capture stop",
+                () => activeArpDevice.StopCapture(),
+                shutdownWarnings);
+            AttemptDeviceCleanup(
+                "ARP event unsubscription",
+                () => activeArpDevice.OnPacketArrival -= OnArpPacketArrival,
+                shutdownWarnings);
+            AttemptDeviceCleanup(
+                "ARP capture close",
+                activeArpDevice.Close,
+                shutdownWarnings);
             arpDevice = null;
         }
 
-        if (forwardingDevice is not null)
+        var activeForwardingDevice = forwardingDevice;
+        if (activeForwardingDevice is not null)
         {
-            forwardingDevice.Close();
+            AttemptDeviceCleanup(
+                "forwarding capture close",
+                activeForwardingDevice.Close,
+                shutdownWarnings);
             forwardingDevice = null;
         }
 
@@ -947,10 +956,15 @@ public sealed class PcapLanEngine : IAsyncDisposable
         gatewayMac = null;
         profile = null;
         restoring = false;
-        var failure = backgroundFailure;
-        var stoppedMessage = failure is null
-            ? "Stopped. Corrective ARP mappings were sent."
-            : $"Stopped after an engine error: {failure}. Corrective ARP mappings were attempted.";
+        var shutdownWarning = shutdownWarnings.Count == 0
+            ? null
+            : string.Join(" | ", shutdownWarnings);
+        var failure = backgroundFailure ?? shutdownWarning;
+        var stoppedMessage = backgroundFailure is not null
+            ? $"Stopped after an engine error: {backgroundFailure}. Corrective ARP mappings were attempted."
+            : shutdownWarning is not null
+                ? $"Stopped with a network-restoration or handle-cleanup warning: {shutdownWarning}"
+                : "Stopped. Corrective ARP mappings were sent.";
         diagnosticLog.Write(
             "controller.stopped",
             "lifecycle",
@@ -959,6 +973,30 @@ public sealed class PcapLanEngine : IAsyncDisposable
             failure ?? reason);
         RaiseStatus(stoppedMessage);
         RaiseStateChanged(false, stoppedMessage, failure, isHealthy: false);
+    }
+
+    private void AttemptDeviceCleanup(
+        string component,
+        Action cleanup,
+        ICollection<string> warnings)
+    {
+        try
+        {
+            cleanup();
+        }
+        catch (Exception exception)
+        {
+            var warning = $"{component} failed: {exception.Message}";
+            warnings.Add(warning);
+            diagnosticLog.Write(
+                "capture-handle.cleanup-failed",
+                component,
+                profile?.Name,
+                "degraded",
+                warning,
+                exception);
+            RaiseStatus(warning);
+        }
     }
 
     public async Task ApplyRuleAsync(string macAddress, TrafficRule rule)
