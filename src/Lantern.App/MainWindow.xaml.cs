@@ -1929,8 +1929,8 @@ public partial class MainWindow : Window
             $"{snapshot.CaptureQueueDroppedPackets + snapshot.InjectionQueueDroppedPackets:N0} · " +
             $"send errors {snapshot.InjectionSendFailures:N0}, retries " +
             $"{snapshot.InjectionRetryAttempts:N0} · " +
-            $"ARP latency {snapshot.LastArpQueueLatencyMilliseconds:N1} ms, " +
-            $"forward latency {snapshot.LastForwardingQueueLatencyMilliseconds:N1} ms · " +
+            $"ARP queue wait {snapshot.LastArpQueueLatencyMilliseconds:N1} ms, " +
+            $"forward queue wait {snapshot.LastForwardingQueueLatencyMilliseconds:N1} ms · " +
             $"{queueBytes} · capture {captureAge} · ARP send {arpAge}";
 
         if (!string.IsNullOrWhiteSpace(snapshot.NativeLibraryError) ||
