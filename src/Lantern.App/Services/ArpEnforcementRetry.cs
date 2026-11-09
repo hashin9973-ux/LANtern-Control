@@ -7,7 +7,8 @@ public static class ArpEnforcementRetry
     public static async Task ExecuteAsync(
         Action operation,
         CancellationToken cancellationToken,
-        Action<int, Exception>? onRetry = null)
+        Action<int, Exception>? onRetry = null,
+        TimeSpan? retryDelay = null)
     {
         ArgumentNullException.ThrowIfNull(operation);
 
@@ -38,7 +39,15 @@ public static class ArpEnforcementRetry
                 }
 
                 onRetry?.Invoke(attempt + 1, exception);
-                await Task.Delay(TimeSpan.FromMilliseconds(250 * attempt), cancellationToken);
+                var initialDelay = retryDelay ?? TimeSpan.FromMilliseconds(250);
+                if (initialDelay <= TimeSpan.Zero)
+                {
+                    throw new ArgumentOutOfRangeException(
+                        nameof(retryDelay),
+                        "Retry delay must be positive.");
+                }
+
+                await Task.Delay(TimeSpan.FromTicks(initialDelay.Ticks * attempt), cancellationToken);
             }
         }
 
