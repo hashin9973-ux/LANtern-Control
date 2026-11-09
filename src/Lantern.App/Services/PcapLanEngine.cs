@@ -17,8 +17,9 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private const long ForwardingQueueMaximumBytes = 32 * 1024 * 1024;
     private const long PriorityQueueMaximumBytes = 1024 * 1024;
     private const double QueuePressureThreshold = 0.75;
-    private static readonly TimeSpan MaximumArpInjectionLatency = TimeSpan.FromMilliseconds(500);
-    private static readonly TimeSpan MaximumForwardingInjectionLatency = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan MaximumArpQueueWait = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan MaximumForwardingQueueWait = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan QueueWaitSampleFreshness = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan CaptureStatisticsInterval = TimeSpan.FromSeconds(2);
     private readonly SemaphoreSlim refreshSync = new(1, 1);
     private readonly AsyncTransitionLock lifecycleGate = new();
@@ -1449,21 +1450,31 @@ public sealed class PcapLanEngine : IAsyncDisposable
             return "Forwarding injection queue is above 75% capacity.";
         }
 
+        var nowUtcTicks = DateTimeOffset.UtcNow.UtcTicks;
+        var arpSampleUtcTicks = Interlocked.Read(ref lastArpInjectionUtcTicks);
         var arpLatency = TimeSpan.FromTicks(Interlocked.Read(ref lastArpQueueLatencyTicks));
-        if (arpLatency > MaximumArpInjectionLatency)
+        if (IsFreshQueueWaitSample(nowUtcTicks, arpSampleUtcTicks) &&
+            arpLatency > MaximumArpQueueWait)
         {
             return $"ARP injection queue wait is {arpLatency.TotalMilliseconds:N0} ms.";
         }
 
+        var forwardingSampleUtcTicks = Interlocked.Read(ref lastForwardedInjectionUtcTicks);
         var forwardingLatency = TimeSpan.FromTicks(
             Interlocked.Read(ref lastForwardingQueueLatencyTicks));
-        if (forwardingLatency > MaximumForwardingInjectionLatency)
+        if (IsFreshQueueWaitSample(nowUtcTicks, forwardingSampleUtcTicks) &&
+            forwardingLatency > MaximumForwardingQueueWait)
         {
             return $"Forwarding injection queue wait is {forwardingLatency.TotalMilliseconds:N0} ms.";
         }
 
         return null;
     }
+
+    private bool IsFreshQueueWaitSample(long nowUtcTicks, long successfulInjectionUtcTicks) =>
+        successfulInjectionUtcTicks > 0 &&
+        nowUtcTicks >= successfulInjectionUtcTicks &&
+        nowUtcTicks - successfulInjectionUtcTicks <= QueueWaitSampleFreshness.Ticks;
 
     private void RefreshEngineHealth()
     {
