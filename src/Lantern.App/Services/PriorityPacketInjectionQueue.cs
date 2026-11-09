@@ -180,6 +180,12 @@ public sealed class PriorityPacketInjectionQueue
 
                 try
                 {
+                    // Queue residence ends when the worker dequeues the item.
+                    // Measure here, before native injection, so the metric is
+                    // not polluted by send duration or the length of a batch.
+                    workItem.OnQueueLatency?.Invoke(
+                        Stopwatch.GetElapsedTime(workItem.EnqueuedAtTimestamp));
+
                     foreach (var frame in workItem.Frames)
                     {
                         await ArpEnforcementRetry.ExecuteAsync(
@@ -194,8 +200,6 @@ public sealed class PriorityPacketInjectionQueue
                                 : TimeSpan.FromMilliseconds(10));
                     }
 
-                    workItem.OnQueueLatency?.Invoke(
-                        Stopwatch.GetElapsedTime(workItem.EnqueuedAtTimestamp));
                     workItem.OnSent?.Invoke();
                     workItem.Completion?.TrySetResult();
                 }
