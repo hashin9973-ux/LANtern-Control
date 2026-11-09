@@ -159,4 +159,48 @@ public sealed class PriorityPacketInjectionQueueTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => runTask);
     }
 
+    [Fact]
+    public async Task RunAsync_ReportsQueueResidenceBeforeInjectionCompletes()
+    {
+        var queue = new PriorityPacketInjectionQueue(maximumForwardingQueueBytes: 32);
+        var sendStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var queueLatencyReported = new TaskCompletionSource<TimeSpan>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var allowSend = new ManualResetEventSlim(false);
+        using var cancellation = new CancellationTokenSource();
+
+        var sendTask = queue.SendPriorityAsync(
+            [0x55],
+            onQueueLatency: latency => queueLatencyReported.TrySetResult(latency));
+
+        var runTask = Task.Run(async () => await queue.RunAsync(
+            _ =>
+            {
+                sendStarted.TrySetResult();
+                allowSend.Wait();
+            },
+            () => true,
+            onRetry: null,
+            (_, _) => { },
+            cancellation.Token));
+
+        try
+        {
+            await sendStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            var measuredLatency = await queueLatencyReported.Task.WaitAsync(
+                TimeSpan.FromSeconds(2));
+
+            Assert.True(measuredLatency >= TimeSpan.Zero);
+            Assert.False(sendTask.IsCompleted);
+        }
+        finally
+        {
+            allowSend.Set();
+            cancellation.Cancel();
+        }
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => runTask);
+    }
+
 }
