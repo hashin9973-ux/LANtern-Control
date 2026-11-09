@@ -1505,7 +1505,9 @@ public sealed class PcapLanEngine : IAsyncDisposable
             DateTimeOffset.UtcNow);
         if (identity.Warning is not null)
         {
-            IdentityAlertDetected?.Invoke(this, identity.Warning);
+            NotifyObserver(
+                "ARP identity alert",
+                () => IdentityAlertDetected?.Invoke(this, identity.Warning));
         }
 
         if (identity.IsConflict ||
