@@ -335,15 +335,26 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 var forwarderStarted = new TaskCompletionSource(
                     TaskCreationOptions.RunContinuationsAsynchronously);
 
+                // These synchronous, CPU/native-I/O loops each get a dedicated
+                // worker thread. They must not depend on ThreadPool growth when
+                // gameplay traffic or UI/script work saturates the shared pool.
                 var captureTask = BackgroundLoopSupervisor.RunAsync(
                     "Npcap capture loop",
-                    () => Task.Run(() => RunForwardingLoop(engineToken, forwarderStarted)),
+                    () => Task.Factory.StartNew(
+                        () => RunForwardingLoop(engineToken, forwarderStarted),
+                        engineToken,
+                        TaskCreationOptions.LongRunning,
+                        TaskScheduler.Default),
                     engineToken,
                     HandleBackgroundFailure);
 
                 var processingTask = BackgroundLoopSupervisor.RunAsync(
                     "Packet processing loop",
-                    () => RunPacketProcessingLoopAsync(engineToken),
+                    () => Task.Factory.StartNew(
+                        () => RunPacketProcessingLoop(engineToken),
+                        engineToken,
+                        TaskCreationOptions.LongRunning,
+                        TaskScheduler.Default),
                     engineToken,
                     HandleBackgroundFailure);
 
@@ -1109,14 +1120,17 @@ public sealed class PcapLanEngine : IAsyncDisposable
         }
     }
 
-    private async Task RunPacketProcessingLoopAsync(CancellationToken cancellationToken)
+    private void RunPacketProcessingLoop(CancellationToken cancellationToken)
     {
         var activeQueue = captureQueue ??
             throw new InvalidOperationException("The capture processing queue is not available.");
 
         while (true)
         {
-            var packet = await activeQueue.ReadAsync(cancellationToken);
+            var packet = activeQueue.ReadAsync(cancellationToken)
+                .AsTask()
+                .GetAwaiter()
+                .GetResult();
             if (controlling && !restoring)
             {
                 ProcessForwardingFrame(packet);
