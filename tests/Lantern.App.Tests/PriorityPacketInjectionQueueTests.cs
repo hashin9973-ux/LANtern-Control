@@ -119,7 +119,7 @@ public sealed class PriorityPacketInjectionQueueTests
             [new byte[] { 0x12 }],
             () => allForwarded.TrySetResult()));
 
-        var runTask = queue.RunAsync(
+        var runTask = Task.Run(async () => await queue.RunAsync(
             frame =>
             {
                 if (frame[0] == 0x10)
@@ -137,7 +137,7 @@ public sealed class PriorityPacketInjectionQueueTests
             () => true,
             onRetry: null,
             (_, _) => { },
-            cancellation.Token);
+            cancellation.Token));
 
         try
         {
