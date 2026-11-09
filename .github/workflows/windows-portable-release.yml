@@ -29,7 +29,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: windows-portable-v0.1.12
+  group: windows-portable-v0.1.13
   cancel-in-progress: false
 
 jobs:
@@ -73,7 +73,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Path .\outputs -Force | Out-Null
-          $archive = ".\outputs\LANtern-Control-v0.1.12-win-x64.zip"
+          $archive = ".\outputs\LANtern-Control-v0.1.13-win-x64.zip"
           if (Test-Path $archive) { Remove-Item $archive -Force }
           Compress-Archive -Path .\release\* -DestinationPath $archive -CompressionLevel Optimal
           if (-not (Test-Path $archive)) { throw "Portable ZIP was not created." }
@@ -84,8 +84,8 @@ jobs:
       - name: Upload portable build artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: LANtern-Control-v0.1.12-win-x64
-          path: .\outputs\LANtern-Control-v0.1.12-win-x64.zip
+          name: LANtern-Control-v0.1.13-win-x64
+          path: .\outputs\LANtern-Control-v0.1.13-win-x64.zip
           if-no-files-found: error
           retention-days: 30
 
@@ -93,14 +93,14 @@ jobs:
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3
         with:
-          tag_name: v0.1.12
+          tag_name: v0.1.13
           target_commitish: master
-          name: LANtern Control v0.1.12
+          name: LANtern Control v0.1.13
           body: |
             Windows x64 portable build.
 
             Improves live ARP enforcement with bounded retries for transient Npcap send failures and supervised background loops that report faults instead of silently stopping. Also keeps startup discovery passive while retaining explicit device scans.
           generate_release_notes: true
-          files: .\outputs\LANtern-Control-v0.1.12-win-x64.zip
+          files: .\outputs\LANtern-Control-v0.1.13-win-x64.zip
           fail_on_unmatched_files: true
           make_latest: true
