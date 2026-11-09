@@ -1571,7 +1571,15 @@ public sealed class PcapLanEngine : IAsyncDisposable
             return;
         }
 
-        activeQueue.EnqueuePriority(bytes, RecordArpInjectionSuccess);
+        try
+        {
+            activeQueue.EnqueuePriority(bytes, RecordArpInjectionSuccess);
+        }
+        catch (InvalidOperationException exception)
+        {
+            HandleBackgroundFailure("ARP priority injection queue", exception);
+            throw;
+        }
     }
 
     private async Task SendArpPacketAsync(
@@ -1588,10 +1596,18 @@ public sealed class PcapLanEngine : IAsyncDisposable
             return;
         }
 
-        await activeQueue.SendPriorityAsync(
-            bytes,
-            cancellationToken,
-            RecordArpInjectionSuccess);
+        try
+        {
+            await activeQueue.SendPriorityAsync(
+                bytes,
+                cancellationToken,
+                RecordArpInjectionSuccess);
+        }
+        catch (InvalidOperationException exception)
+        {
+            HandleBackgroundFailure("ARP priority injection queue", exception);
+            throw;
+        }
     }
 
     private void SendArpPacketDirect(byte[] bytes)
