@@ -91,10 +91,12 @@ public sealed class PcapLanEngine : IAsyncDisposable
         this.policy = policy;
     }
 
-    public bool IsRunning => arpDevice?.Opened == true || forwardingDevice?.Opened == true;
+    public bool IsRunning => arpDevice is not null || forwardingDevice is not null;
 
     public bool IsHealthy =>
         IsRunning &&
+        arpDevice?.Opened == true &&
+        forwardingDevice?.Opened == true &&
         Volatile.Read(ref engineHealthy) == 1 &&
         backgroundFailure is null &&
         Volatile.Read(ref transientDegradedReason) is null &&
