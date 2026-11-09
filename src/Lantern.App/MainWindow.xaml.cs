@@ -934,45 +934,55 @@ public partial class MainWindow : Window
 
             DiscoveryRefreshResult arpResult;
             string? arpFailure = null;
-            try
-            {
-                // ARP gets first chance to identify hosts. Supplemental protocol
-                // probes run only after this bounded, faster pass has completed.
-                arpResult = await engine.ScanDevicesAsync(adapter);
-            }
-            catch (Exception exception)
-            {
-                arpFailure = exception.Message;
-                arpResult = new DiscoveryRefreshResult(
-                    0,
-                    registry.Peek().Count,
-                    ProbeWarning: exception.Message);
-            }
-
-            var observationTime = DateTimeOffset.UtcNow;
-            var recentlyObservedAddresses = registry.Peek()
-                .Where(snapshot =>
-                    DevicePresencePolicy.Classify(snapshot.LastSeen, observationTime) ==
-                    DevicePresence.Online)
-                .Select(snapshot => snapshot.IpAddress)
-                .ToHashSet();
-
-            SetStatus(
-                "Checking only addresses without recent reachability evidence using faster paced protocol fallbacks…",
-                null);
-
-            LocalHostDiscoveryResult hostResult;
+            LocalHostDiscoveryResult hostResult = new([], 0);
             string? hostFailure = null;
-            try
+
+            if (isAutomatic)
             {
-                hostResult = await localHostDiscoveryService.ScanAsync(
-                    adapter,
-                    recentlyObservedAddresses);
+                // The engine already performs paced presence probes while controlling.
+                // A periodic full-subnet scan competes with packet forwarding and can
+                // create avoidable CPU/network load. Automatic refresh is inventory-only.
+                arpResult = await engine.RefreshNeighborsAsync();
             }
-            catch (Exception exception)
+            else
             {
-                hostFailure = exception.Message;
-                hostResult = new LocalHostDiscoveryResult([], 0);
+                // Explicit manual scans may perform the full discovery pass.
+                try
+                {
+                    arpResult = await engine.ScanDevicesAsync(adapter);
+                }
+                catch (Exception exception)
+                {
+                    arpFailure = exception.Message;
+                    arpResult = new DiscoveryRefreshResult(
+                        0,
+                        registry.Peek().Count,
+                        ProbeWarning: exception.Message);
+                }
+
+                var observationTime = DateTimeOffset.UtcNow;
+                var recentlyObservedAddresses = registry.Peek()
+                    .Where(snapshot =>
+                        DevicePresencePolicy.Classify(snapshot.LastSeen, observationTime) ==
+                        DevicePresence.Online)
+                    .Select(snapshot => snapshot.IpAddress)
+                    .ToHashSet();
+
+                SetStatus(
+                    "Checking only addresses without recent reachability evidence using faster paced protocol fallbacks…",
+                    null);
+
+                try
+                {
+                    hostResult = await localHostDiscoveryService.ScanAsync(
+                        adapter,
+                        recentlyObservedAddresses);
+                }
+                catch (Exception exception)
+                {
+                    hostFailure = exception.Message;
+                    hostResult = new LocalHostDiscoveryResult([], 0);
+                }
             }
 
             var liveMacByIp = registry.Peek()
