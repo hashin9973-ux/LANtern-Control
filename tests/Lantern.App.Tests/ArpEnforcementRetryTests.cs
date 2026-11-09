@@ -62,7 +62,8 @@ public sealed class ArpEnforcementRetryTests
             cancellation.Token);
         cancellation.Cancel();
 
-        await execution;
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            async () => await execution);
 
         Assert.Equal(1, attempts);
     }
