@@ -51,7 +51,8 @@ public sealed class PriorityPacketInjectionQueue
     public void EnqueuePriority(
         byte[] frame,
         Action? onSent = null,
-        Action<TimeSpan>? onQueueLatency = null)
+        Action<TimeSpan>? onQueueLatency = null,
+        Action? onFailed = null)
     {
         ArgumentNullException.ThrowIfNull(frame);
         if (frame.Length == 0)
@@ -73,7 +74,8 @@ public sealed class PriorityPacketInjectionQueue
             CancellationToken: CancellationToken.None,
             EnqueuedAtTimestamp: Stopwatch.GetTimestamp(),
             OnSent: onSent,
-            OnQueueLatency: onQueueLatency));
+            OnQueueLatency: onQueueLatency,
+            OnFailed: onFailed));
         signal.Writer.TryWrite(true);
     }
 
@@ -109,7 +111,8 @@ public sealed class PriorityPacketInjectionQueue
             CancellationToken: cancellationToken,
             EnqueuedAtTimestamp: Stopwatch.GetTimestamp(),
             OnSent: onSent,
-            OnQueueLatency: onQueueLatency));
+            OnQueueLatency: onQueueLatency,
+            OnFailed: null));
         signal.Writer.TryWrite(true);
         return completion.Task.WaitAsync(cancellationToken);
     }
@@ -139,7 +142,8 @@ public sealed class PriorityPacketInjectionQueue
             CancellationToken: CancellationToken.None,
             EnqueuedAtTimestamp: Stopwatch.GetTimestamp(),
             OnSent: onSent,
-            OnQueueLatency: onQueueLatency));
+            OnQueueLatency: onQueueLatency,
+            OnFailed: null));
         signal.Writer.TryWrite(true);
         return true;
     }
@@ -211,6 +215,7 @@ public sealed class PriorityPacketInjectionQueue
                 catch (Exception exception)
                 {
                     workItem.Completion?.TrySetException(exception);
+                    workItem.OnFailed?.Invoke();
                     onFailure(
                         workItem.IsPriority ? "ARP packet injection failed" : "Forwarding packet injection failed",
                         exception);
@@ -272,5 +277,6 @@ public sealed class PriorityPacketInjectionQueue
         CancellationToken CancellationToken,
         long EnqueuedAtTimestamp,
         Action? OnSent,
-        Action<TimeSpan>? OnQueueLatency);
+        Action<TimeSpan>? OnQueueLatency,
+        Action? OnFailed);
 }

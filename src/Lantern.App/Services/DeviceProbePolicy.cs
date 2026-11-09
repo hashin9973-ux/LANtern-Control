@@ -1,4 +1,5 @@
 using System.Net;
+using Lantern.Core.Control;
 using Lantern.Core.Devices;
 using Lantern.Core.Networking;
 
@@ -71,6 +72,37 @@ public static class DeviceProbePolicy
             .ThenBy(device => ToUInt32(device.IpAddress))
             .Take(MaxTargetsPerBatch)
             .Select(device => device.IpAddress)
+            .ToArray();
+    }
+
+    /// <summary>
+    /// Selects only previously saved devices that have an explicit active control
+    /// rule. This is a targeted verification pass, not subnet discovery.
+    /// </summary>
+    public static IReadOnlyList<IPAddress> GetRuleTargets(
+        IEnumerable<KnownDeviceHint> knownDevices,
+        AdapterProfile adapter,
+        IReadOnlySet<string> controlledMacAddresses)
+    {
+        ArgumentNullException.ThrowIfNull(knownDevices);
+        ArgumentNullException.ThrowIfNull(adapter);
+        ArgumentNullException.ThrowIfNull(controlledMacAddresses);
+
+        var localHosts = IPv4DiscoveryRange
+            .EnumerateHosts(adapter.LocalAddress, adapter.PrefixLength)
+            .ToHashSet();
+
+        return knownDevices
+            .Where(hint =>
+                hint.LastKnownIp is not null &&
+                hint.LastKnownIp.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork &&
+                controlledMacAddresses.Contains(
+                    TrafficPolicy.NormalizeMac(hint.MacAddress.ToString())))
+            .Select(hint => hint.LastKnownIp!)
+            .Where(localHosts.Contains)
+            .Distinct()
+            .OrderBy(ToUInt32)
+            .Take(MaxTargetsPerBatch)
             .ToArray();
     }
 

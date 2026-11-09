@@ -270,7 +270,8 @@ public partial class MainWindow : Window
             TrafficChart.Samples = trafficHistory.Samples;
             RefreshDevices(null, EventArgs.Empty);
             await SaveSettingsIfDirtyAsync();
-            SetStatus("Control active", true);
+            SetStatus("Controller started; device-rule confirmation is shown above.", null);
+            RefreshEngineHealthDisplay();
             refreshTimer.Start();
         }
         catch (Exception exception)
@@ -1870,10 +1871,6 @@ public partial class MainWindow : Window
         {
             controlStartedAt ??= DateTimeOffset.UtcNow;
             refreshTimer.Start();
-            TopStatusText.Text = isHealthy ? "Active" : "Degraded";
-            StatusDot.Fill = isHealthy
-                ? new SolidColorBrush(Color.FromRgb(104, 192, 138))
-                : new SolidColorBrush(Color.FromRgb(231, 164, 72));
         }
         else
         {
@@ -1898,10 +1895,8 @@ public partial class MainWindow : Window
             return;
         }
 
-        TopStatusText.Text = snapshot.IsHealthy ? "Active" : "Degraded";
-        StatusDot.Fill = snapshot.IsHealthy
-            ? new SolidColorBrush(Color.FromRgb(104, 192, 138))
-            : new SolidColorBrush(Color.FromRgb(231, 164, 72));
+        TopStatusText.Text = GetControlStatusLabel(snapshot);
+        StatusDot.Fill = new SolidColorBrush(GetControlStatusColor(snapshot));
 
         var nativeName = string.IsNullOrWhiteSpace(snapshot.NativeLibraryPath)
             ? "native DLL path unavailable"
@@ -1919,6 +1914,8 @@ public partial class MainWindow : Window
             : "not sent yet";
 
         PacketHealthText.Text =
+            $"rule targets observed {snapshot.ObservedRuleDeviceCount}/{snapshot.ConfiguredRuleDeviceCount}, " +
+            $"ARP sends accepted {snapshot.ConfirmedRuleDeviceCount}/{snapshot.ConfiguredRuleDeviceCount} · " +
             $"{health} · {snapshot.CaptureLibraryVersion} · {nativeName} · " +
             $"capture {snapshot.CapturePacketsPerSecond:N0} pkt/s " +
             $"{snapshot.CaptureBytesPerSecond / 1024:N0} KiB/s · " +
@@ -1946,8 +1943,51 @@ public partial class MainWindow : Window
                 $"SharpPcap {snapshot.SharpPcapVersion}; " +
                 $"native DLL {snapshot.NativeLibraryPath ?? "unverified"} " +
                 $"({snapshot.NativeLibraryFileVersion ?? "version unavailable"}). " +
-                $"Last forwarded injection: {snapshot.LastForwardedInjectionAtUtc?.ToString("O") ?? "not yet"}";
+                $"Last forwarded injection: {snapshot.LastForwardedInjectionAtUtc?.ToString("O") ?? "not yet"}. " +
+                "ARP-sent counts mean Npcap accepted the local send call; they do not prove the remote device applied the update.";
         }
+    }
+
+    private static string GetControlStatusLabel(PcapEngineHealthSnapshot snapshot)
+    {
+        if (!snapshot.IsRunning)
+        {
+            return "Idle";
+        }
+
+        if (!snapshot.IsHealthy)
+        {
+            return "Degraded";
+        }
+
+        if (snapshot.ConfiguredRuleDeviceCount == 0)
+        {
+            return "Monitoring";
+        }
+
+        if (snapshot.ObservedRuleDeviceCount < snapshot.ConfiguredRuleDeviceCount)
+        {
+            return $"Observed {snapshot.ObservedRuleDeviceCount}/{snapshot.ConfiguredRuleDeviceCount}";
+        }
+
+        return $"ARP accepted {snapshot.ConfirmedRuleDeviceCount}/{snapshot.ConfiguredRuleDeviceCount}";
+    }
+
+    private static Color GetControlStatusColor(PcapEngineHealthSnapshot snapshot)
+    {
+        if (!snapshot.IsHealthy)
+        {
+            return Color.FromRgb(240, 100, 115);
+        }
+
+        if (snapshot.ConfiguredRuleDeviceCount > 0 &&
+            (snapshot.ObservedRuleDeviceCount < snapshot.ConfiguredRuleDeviceCount ||
+             snapshot.ConfirmedRuleDeviceCount < snapshot.ConfiguredRuleDeviceCount))
+        {
+            return Color.FromRgb(231, 164, 72);
+        }
+
+        return Color.FromRgb(104, 192, 138);
     }
 
     private void Engine_OnDeviceIdentityLearned(
@@ -2160,19 +2200,29 @@ public partial class MainWindow : Window
 
     private void SetStatus(string message, bool? active)
     {
-        TopStatusText.Text = active switch
+        if (engine.IsRunning && active != false)
         {
-            true => "Active",
-            false => "Needs attention",
-            null => engine.IsRunning ? "Working" : "Idle",
-        };
-        DetailStatusText.Text = message;
-        StatusDot.Fill = new SolidColorBrush(
-            active switch
+            var snapshot = engine.GetHealthSnapshot();
+            TopStatusText.Text = GetControlStatusLabel(snapshot);
+            StatusDot.Fill = new SolidColorBrush(GetControlStatusColor(snapshot));
+        }
+        else
+        {
+            TopStatusText.Text = active switch
             {
-                true => Color.FromRgb(104, 192, 138),
-                false => Color.FromRgb(240, 100, 115),
-                null => Color.FromRgb(168, 144, 149),
-            });
+                true => "Active",
+                false => "Needs attention",
+                null => engine.IsRunning ? "Working" : "Idle",
+            };
+            StatusDot.Fill = new SolidColorBrush(
+                active switch
+                {
+                    true => Color.FromRgb(104, 192, 138),
+                    false => Color.FromRgb(240, 100, 115),
+                    null => Color.FromRgb(168, 144, 149),
+                });
+        }
+
+        DetailStatusText.Text = message;
     }
 }
