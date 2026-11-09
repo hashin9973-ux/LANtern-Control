@@ -37,7 +37,8 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private BoundedPacketQueue? captureQueue;
     private PriorityPacketInjectionQueue? injectionQueue;
     private PcapRuntimeInfo? pcapRuntimeInfo;
-    private string? transientDegradedReason;
+    private readonly ConcurrentDictionary<string, string> transientDegradedReasons =
+        new(StringComparer.OrdinalIgnoreCase);
     private string? captureStatisticsWarning;
     private uint previousCaptureReceived;
     private uint previousCaptureDropped;
@@ -103,7 +104,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
         forwardingDevice?.Opened == true &&
         Volatile.Read(ref engineHealthy) == 1 &&
         backgroundFailure is null &&
-        Volatile.Read(ref transientDegradedReason) is null &&
+        transientDegradedReasons.IsEmpty &&
         Volatile.Read(ref captureStatisticsWarning) is null &&
         pcapRuntimeInfo?.NativeLibraryPath is not null &&
         backgroundTask?.IsCompleted != true;
@@ -118,7 +119,10 @@ public sealed class PcapLanEngine : IAsyncDisposable
         return new PcapEngineHealthSnapshot(
             IsRunning,
             IsHealthy,
-            backgroundFailure ?? Volatile.Read(ref transientDegradedReason),
+            backgroundFailure ??
+                GetTransientDegradedReason() ??
+                Volatile.Read(ref captureStatisticsWarning) ??
+                (runtime?.NativeLibraryPath is null ? runtime?.Error : null),
             runtime?.CaptureLibraryVersion ?? "Not loaded",
             runtime?.SharpPcapVersion ?? "Unknown",
             runtime?.NativeLibraryPath,
@@ -196,17 +200,19 @@ public sealed class PcapLanEngine : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(adapter);
         using var lifecycleTransition = await lifecycleGate.EnterAsync(cancellationToken);
+        if (IsRunning)
+        {
+            return;
+        }
+
         diagnosticLog.Write(
             "controller.starting",
             "lifecycle",
             adapter.Name,
             "starting",
             "user-requested-start");
-        if (IsRunning)
-            {
-                return;
-            }
-
+        try
+        {
             await NpfDriverService.EnsureAvailableAsync(cancellationToken);
             profile = adapter;
             clientMappings.BeginAdapter(adapter.Id);
@@ -220,7 +226,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             restoring = false;
             controlling = false;
             backgroundFailure = null;
-            transientDegradedReason = null;
+            transientDegradedReasons.Clear();
             Volatile.Write(ref engineHealthy, 0);
             Interlocked.Exchange(ref forwardedPacketCount, 0);
             Interlocked.Exchange(ref droppedPacketCount, 0);
@@ -259,9 +265,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 ?? throw new InvalidOperationException(
                     $"WinPcap could not match the Windows adapter “{adapter.Name}”.");
 
-            try
-            {
-                arpDevice = captureDevice;
+            arpDevice = captureDevice;
                 arpDevice.OnPacketArrival += OnArpPacketArrival;
                 arpDevice.Open(PcapCaptureConfiguration.CreateForArpDiscovery());
                 arpDevice.Filter = "arp";
@@ -374,24 +378,21 @@ public sealed class PcapLanEngine : IAsyncDisposable
                     cancellationToken);
 
                 await RefreshNeighborsAsync(cancellationToken);
-                if (backgroundFailure is not null)
+                if (backgroundFailure is not null ||
+                    !IsRunning ||
+                    arpDevice?.Opened != true ||
+                    forwardingDevice?.Opened != true ||
+                    backgroundTask?.IsCompleted == true)
                 {
-                    throw new InvalidOperationException(backgroundFailure);
+                    throw new InvalidOperationException(
+                        backgroundFailure ?? "A required packet-processing worker failed during startup.");
                 }
 
                 PoisonClients();
                 Volatile.Write(ref engineHealthy, 1);
-                if (!IsHealthy)
-                {
-                    throw new InvalidOperationException(
-                        backgroundFailure ??
-                        Volatile.Read(ref transientDegradedReason) ??
-                        "Packet capture health could not be verified.");
-                }
-
-                const string activeMessage =
-                    "Live monitoring active — packet capture, queue pressure, Npcap drops, " +
-                    "and injection health are being monitored.";
+                var activeMessage = IsHealthy
+                    ? "Control is running — packet capture, queue pressure, Npcap drops, and injection health are being monitored."
+                    : $"Control is running in DEGRADED mode: {GetHealthSnapshot().Failure ?? "packet health could not be fully verified."}";
                 diagnosticLog.Write(
                     "controller.running",
                     "lifecycle",
@@ -1226,8 +1227,8 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
     private void SetTransientDegraded(string reason)
     {
-        var previous = Interlocked.CompareExchange(ref transientDegradedReason, reason, null);
-        if (previous is not null)
+        var key = GetDegradationKey(reason);
+        if (!transientDegradedReasons.TryAdd(key, reason))
         {
             return;
         }
@@ -1246,16 +1247,54 @@ public sealed class PcapLanEngine : IAsyncDisposable
             isHealthy: false);
     }
 
-    private void ClearTransientDegraded(string expectedPrefix)
+    private static string GetDegradationKey(string reason)
     {
-        var current = Volatile.Read(ref transientDegradedReason);
-        if (current is null ||
-            !current.StartsWith(expectedPrefix, StringComparison.Ordinal))
+        if (reason.StartsWith("Capture processing queue", StringComparison.Ordinal))
         {
-            return;
+            return "capture-queue";
         }
 
-        if (Interlocked.CompareExchange(ref transientDegradedReason, null, current) == current)
+        if (reason.StartsWith("Forwarding injection queue", StringComparison.Ordinal))
+        {
+            return "forwarding-queue";
+        }
+
+        if (reason.StartsWith("Npcap reported", StringComparison.Ordinal))
+        {
+            return "npcap-drops";
+        }
+
+        if (reason.StartsWith("Npcap capture statistics", StringComparison.Ordinal))
+        {
+            return "npcap-statistics";
+        }
+
+        if (reason.StartsWith("Capture library", StringComparison.Ordinal))
+        {
+            return "native-library";
+        }
+
+        return reason;
+    }
+
+    private string? GetTransientDegradedReason() =>
+        transientDegradedReasons.OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            .Select(pair => pair.Value)
+            .FirstOrDefault();
+
+    private void ClearTransientDegraded(string expectedPrefix)
+    {
+        var removed = false;
+        foreach (var pair in transientDegradedReasons)
+        {
+            if (pair.Value.StartsWith(expectedPrefix, StringComparison.Ordinal) &&
+                transientDegradedReasons.TryRemove(pair.Key, out _))
+            {
+                removed = true;
+            }
+        }
+
+        if (removed)
         {
             RefreshEngineHealth();
         }
@@ -1265,21 +1304,14 @@ public sealed class PcapLanEngine : IAsyncDisposable
     {
         var currentCaptureQueue = captureQueue;
         var currentInjectionQueue = injectionQueue;
-        var degraded = Volatile.Read(ref transientDegradedReason);
-        if (degraded is null)
-        {
-            return;
-        }
-
-        if (degraded.StartsWith("Capture processing queue", StringComparison.Ordinal) &&
-            currentCaptureQueue is not null &&
+        if (currentCaptureQueue is not null &&
             currentCaptureQueue.BufferedBytes <= CaptureQueueMaximumBytes / 4)
         {
             ClearTransientDegraded("Capture processing queue");
         }
-        else if (degraded.StartsWith("Forwarding injection queue", StringComparison.Ordinal) &&
-                 currentInjectionQueue is not null &&
-                 currentInjectionQueue.ForwardingQueueBytes <= ForwardingQueueMaximumBytes / 4)
+
+        if (currentInjectionQueue is not null &&
+            currentInjectionQueue.ForwardingQueueBytes <= ForwardingQueueMaximumBytes / 4)
         {
             ClearTransientDegraded("Forwarding injection queue");
         }
@@ -1291,7 +1323,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
                       arpDevice?.Opened == true &&
                       forwardingDevice?.Opened == true &&
                       backgroundFailure is null &&
-                      Volatile.Read(ref transientDegradedReason) is null &&
+                      transientDegradedReasons.IsEmpty &&
                       Volatile.Read(ref captureStatisticsWarning) is null &&
                       pcapRuntimeInfo?.NativeLibraryPath is not null &&
                       backgroundTask?.IsCompleted != true;
