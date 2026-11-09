@@ -21,6 +21,7 @@ public sealed class PriorityPacketInjectionQueueTests
 
         var runTask = queue.RunAsync(
             frame => sent.Add(frame[0]),
+            () => true,
             onRetry: null,
             (_, _) => { },
             cancellation.Token);
@@ -62,6 +63,7 @@ public sealed class PriorityPacketInjectionQueueTests
                     throw new IOException("Temporary injection failure.");
                 }
             },
+            () => true,
             (_, attempt, _) => retries.Add(attempt),
             (_, _) => { },
             cancellation.Token);
@@ -85,6 +87,7 @@ public sealed class PriorityPacketInjectionQueueTests
         var prioritySent = queue.SendPriorityAsync([0x55]);
         var runTask = queue.RunAsync(
             _ => throw new IOException("Npcap send failed."),
+            () => true,
             onRetry: null,
             (_, _) => failureReported.TrySetResult(),
             cancellation.Token);
