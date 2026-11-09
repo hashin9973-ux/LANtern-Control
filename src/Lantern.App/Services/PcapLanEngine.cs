@@ -16,6 +16,9 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private const long CaptureQueueMaximumBytes = 32 * 1024 * 1024;
     private const long ForwardingQueueMaximumBytes = 32 * 1024 * 1024;
     private const long PriorityQueueMaximumBytes = 1024 * 1024;
+    private const double QueuePressureThreshold = 0.75;
+    private static readonly TimeSpan MaximumArpInjectionLatency = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan MaximumForwardingInjectionLatency = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan CaptureStatisticsInterval = TimeSpan.FromSeconds(2);
     private readonly SemaphoreSlim refreshSync = new(1, 1);
     private readonly AsyncTransitionLock lifecycleGate = new();
@@ -106,6 +109,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
         healthFaults.IsHealthy &&
         Volatile.Read(ref captureStatisticsWarning) is null &&
         pcapRuntimeInfo?.NativeLibraryPath is not null &&
+        GetLiveHealthWarning() is null &&
         backgroundTask?.IsCompleted != true;
 
     public bool IsControlling => controlling;
@@ -121,6 +125,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             backgroundFailure ??
                 GetTransientDegradedReason() ??
                 Volatile.Read(ref captureStatisticsWarning) ??
+                GetLiveHealthWarning() ??
                 (runtime?.NativeLibraryPath is null ? runtime?.Error : null),
             runtime?.CaptureLibraryVersion ?? "Not loaded",
             runtime?.SharpPcapVersion ?? "Unknown",
@@ -1310,6 +1315,11 @@ public sealed class PcapLanEngine : IAsyncDisposable
             return "forwarding-queue";
         }
 
+        if (reason.StartsWith("ARP priority injection queue", StringComparison.Ordinal))
+        {
+            return "priority-queue";
+        }
+
         if (reason.StartsWith("Npcap reported", StringComparison.Ordinal))
         {
             return "npcap-drops";
@@ -1343,6 +1353,27 @@ public sealed class PcapLanEngine : IAsyncDisposable
         var currentCaptureQueue = captureQueue;
         var currentInjectionQueue = injectionQueue;
         if (currentCaptureQueue is not null &&
+            currentCaptureQueue.BufferedBytes >= CaptureQueueMaximumBytes * QueuePressureThreshold)
+        {
+            SetTransientDegraded(
+                $"Capture processing queue pressure is high ({currentCaptureQueue.BufferedBytes / 1024:N0} KiB buffered).");
+        }
+
+        if (currentInjectionQueue is not null &&
+            currentInjectionQueue.ForwardingQueueBytes >= ForwardingQueueMaximumBytes * QueuePressureThreshold)
+        {
+            SetTransientDegraded(
+                $"Forwarding injection queue pressure is high ({currentInjectionQueue.ForwardingQueueBytes / 1024:N0} KiB buffered).");
+        }
+
+        if (currentInjectionQueue is not null &&
+            currentInjectionQueue.PriorityQueueBytes >= PriorityQueueMaximumBytes * QueuePressureThreshold)
+        {
+            SetTransientDegraded(
+                $"ARP priority injection queue pressure is high ({currentInjectionQueue.PriorityQueueBytes / 1024:N0} KiB buffered).");
+        }
+
+        if (currentCaptureQueue is not null &&
             currentCaptureQueue.BufferedBytes <= CaptureQueueMaximumBytes / 4)
         {
             ClearTransientDegraded("Capture processing queue");
@@ -1355,16 +1386,47 @@ public sealed class PcapLanEngine : IAsyncDisposable
         }
     }
 
+    private string? GetLiveHealthWarning()
+    {
+        var currentCaptureQueue = captureQueue;
+        if (currentCaptureQueue is not null &&
+            currentCaptureQueue.BufferedBytes >= CaptureQueueMaximumBytes * QueuePressureThreshold)
+        {
+            return "Capture processing queue is above 75% capacity.";
+        }
+
+        var currentInjectionQueue = injectionQueue;
+        if (currentInjectionQueue is not null &&
+            currentInjectionQueue.PriorityQueueBytes >= PriorityQueueMaximumBytes * QueuePressureThreshold)
+        {
+            return "ARP priority injection queue is above 75% capacity.";
+        }
+
+        if (currentInjectionQueue is not null &&
+            currentInjectionQueue.ForwardingQueueBytes >= ForwardingQueueMaximumBytes * QueuePressureThreshold)
+        {
+            return "Forwarding injection queue is above 75% capacity.";
+        }
+
+        var arpLatency = TimeSpan.FromTicks(Interlocked.Read(ref lastArpQueueLatencyTicks));
+        if (arpLatency > MaximumArpInjectionLatency)
+        {
+            return $"ARP injection queue wait is {arpLatency.TotalMilliseconds:N0} ms.";
+        }
+
+        var forwardingLatency = TimeSpan.FromTicks(
+            Interlocked.Read(ref lastForwardingQueueLatencyTicks));
+        if (forwardingLatency > MaximumForwardingInjectionLatency)
+        {
+            return $"Forwarding injection queue wait is {forwardingLatency.TotalMilliseconds:N0} ms.";
+        }
+
+        return null;
+    }
+
     private void RefreshEngineHealth()
     {
-        var healthy = IsRunning &&
-                      arpDevice?.Opened == true &&
-                      forwardingDevice?.Opened == true &&
-                      backgroundFailure is null &&
-                      healthFaults.IsHealthy &&
-                      Volatile.Read(ref captureStatisticsWarning) is null &&
-                      pcapRuntimeInfo?.NativeLibraryPath is not null &&
-                      backgroundTask?.IsCompleted != true;
+        var healthy = IsHealthy;
         var newValue = healthy ? 1 : 0;
         var previous = Interlocked.Exchange(ref engineHealthy, newValue);
         if (previous != newValue)
