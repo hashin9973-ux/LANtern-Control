@@ -47,7 +47,7 @@ public sealed class PriorityPacketInjectionQueue
     /// SharpPcap's packet-arrival callback). A full priority queue is fatal:
     /// the caller must not pretend enforcement succeeded.
     /// </summary>
-    public void EnqueuePriority(byte[] frame)
+    public void EnqueuePriority(byte[] frame, Action? onSent = null)
     {
         ArgumentNullException.ThrowIfNull(frame);
         if (frame.Length == 0)
@@ -67,7 +67,7 @@ public sealed class PriorityPacketInjectionQueue
             QueuedBytes: frame.LongLength,
             Completion: null,
             CancellationToken: CancellationToken.None,
-            OnSent: null));
+            OnSent: onSent));
         signal.Writer.TryWrite(true);
     }
 
@@ -76,7 +76,8 @@ public sealed class PriorityPacketInjectionQueue
     /// </summary>
     public Task SendPriorityAsync(
         byte[] frame,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action? onSent = null)
     {
         ArgumentNullException.ThrowIfNull(frame);
         if (frame.Length == 0)
@@ -99,7 +100,7 @@ public sealed class PriorityPacketInjectionQueue
             QueuedBytes: frame.LongLength,
             Completion: completion,
             CancellationToken: cancellationToken,
-            OnSent: null));
+            OnSent: onSent));
         signal.Writer.TryWrite(true);
         return completion.Task.WaitAsync(cancellationToken);
     }
