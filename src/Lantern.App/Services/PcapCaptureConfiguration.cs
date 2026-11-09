@@ -14,11 +14,12 @@ public static class PcapCaptureConfiguration
         new()
         {
             Mode = mode,
-            ReadTimeout = 1,
+            ReadTimeout = mode == DeviceModes.None ? 100 : 1,
             Snaplen = 65_536,
             BufferSize = 8 * 1024 * 1024,
             KernelBufferSize = 8 * 1024 * 1024,
             MinToCopy = 0,
-            Immediate = true,
+            // Batch forwarding packets to reduce per-packet wakeups and CPU overhead.
+            Immediate = mode != DeviceModes.None,
         };
 }
