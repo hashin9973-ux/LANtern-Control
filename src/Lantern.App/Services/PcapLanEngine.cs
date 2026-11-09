@@ -46,6 +46,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private int injectionSendFailures;
     private long captureReceivedPackets;
     private long captureKernelDroppedPackets;
+    private long lastCaptureStatisticsTimestamp;
     private long captureBytes;
     private long forwardedBytes;
     private long capturePacketsPerSecondMilli;
@@ -224,6 +225,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             Interlocked.Exchange(ref processCpuMilliPercent, 0);
             Interlocked.Exchange(ref lastArpQueueLatencyTicks, 0);
             Interlocked.Exchange(ref lastForwardingQueueLatencyTicks, 0);
+            lastCaptureStatisticsTimestamp = 0;
             lastCaptureStatisticsTimestamp = 0;
             previousCaptureBytesSample = 0;
             previousForwardedPacketsSample = 0;
