@@ -75,13 +75,15 @@ public sealed class PcapLanEngine : IAsyncDisposable
         this.policy = policy;
     }
 
-    public bool IsRunning => arpDevice is not null || forwardingDevice is not null;
+    public bool IsRunning => arpDevice?.Opened == true || forwardingDevice?.Opened == true;
 
     public bool IsHealthy =>
         IsRunning &&
         Volatile.Read(ref engineHealthy) == 1 &&
         backgroundFailure is null &&
         Volatile.Read(ref transientDegradedReason) is null &&
+        Volatile.Read(ref captureStatisticsWarning) is null &&
+        pcapRuntimeInfo?.NativeLibraryPath is not null &&
         backgroundTask?.IsCompleted != true;
 
     public bool IsControlling => controlling;
@@ -229,9 +231,11 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 pcapRuntimeInfo = PcapRuntimeInspector.Inspect();
                 if (pcapRuntimeInfo.NativeLibraryPath is null)
                 {
-                    RaiseStatus(
+                    var warning =
                         $"Capture library loaded as '{pcapRuntimeInfo.CaptureLibraryVersion}', " +
-                        $"but its native module path could not be verified: {pcapRuntimeInfo.Error}");
+                        $"but its native module path could not be verified: {pcapRuntimeInfo.Error}";
+                    SetTransientDegraded(warning);
+                    RaiseStatus(warning);
                 }
                 else
                 {
@@ -328,11 +332,19 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
                 PoisonClients();
                 Volatile.Write(ref engineHealthy, 1);
+                if (!IsHealthy)
+                {
+                    throw new InvalidOperationException(
+                        backgroundFailure ??
+                        Volatile.Read(ref transientDegradedReason) ??
+                        "Packet capture health could not be verified.");
+                }
+
                 const string activeMessage =
                     "Live monitoring active — packet capture, queue pressure, Npcap drops, " +
                     "and injection health are being monitored.";
                 RaiseStatus(activeMessage);
-                RaiseStateChanged(true, activeMessage, isHealthy: true);
+                RaiseStateChanged(true, activeMessage, isHealthy: IsHealthy);
             }
             catch (Exception exception)
             {
@@ -1104,6 +1116,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             previousCaptureReceived = received;
             previousCaptureDropped = dropped;
             Volatile.Write(ref captureStatisticsWarning, null);
+            ClearTransientDegraded("Npcap capture statistics are unavailable");
 
             if (newlyDropped > 0)
             {
@@ -1117,10 +1130,11 @@ public sealed class PcapLanEngine : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            Volatile.Write(
-                ref captureStatisticsWarning,
-                $"Npcap capture statistics are unavailable: {exception.Message}");
-            RaiseStatus(Volatile.Read(ref captureStatisticsWarning)!);
+            var warning =
+                $"Npcap capture statistics are unavailable: {exception.Message}";
+            Volatile.Write(ref captureStatisticsWarning, warning);
+            SetTransientDegraded(warning);
+            RaiseStatus(warning);
         }
     }
 
