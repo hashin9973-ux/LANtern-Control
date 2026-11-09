@@ -487,7 +487,7 @@ public sealed class DeviceViewModelTests
                         System.Reflection.BindingFlags.Instance |
                         System.Reflection.BindingFlags.NonPublic);
                     Assert.NotNull(applyEngineState);
-                    applyEngineState.Invoke(window, [false]);
+                    applyEngineState.Invoke(window, [false, false]);
 
                     Assert.Equal("Idle", topStatus.Text);
                     Assert.Equal("Idle", uptime.Text);
