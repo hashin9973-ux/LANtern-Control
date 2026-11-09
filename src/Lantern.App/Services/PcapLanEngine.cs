@@ -1074,8 +1074,9 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 throw new InvalidOperationException("Npcap did not return capture statistics.");
             var received = statistics.ReceivedPackets;
             var dropped = statistics.DroppedPackets;
+            var firstStatisticsSample = !captureStatisticsInitialized;
 
-            if (!captureStatisticsInitialized)
+            if (firstStatisticsSample)
             {
                 Interlocked.Add(ref captureReceivedPackets, received);
                 Interlocked.Add(ref captureKernelDroppedPackets, dropped);
@@ -1091,9 +1092,9 @@ public sealed class PcapLanEngine : IAsyncDisposable
                     unchecked((uint)(dropped - previousCaptureDropped)));
             }
 
-            var newlyDropped = captureStatisticsInitialized
-                ? unchecked((uint)(dropped - previousCaptureDropped))
-                : dropped;
+            var newlyDropped = firstStatisticsSample
+                ? dropped
+                : unchecked((uint)(dropped - previousCaptureDropped));
             previousCaptureReceived = received;
             previousCaptureDropped = dropped;
             Volatile.Write(ref captureStatisticsWarning, null);
@@ -1629,27 +1630,6 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
     private void RecordArpInjectionSuccess() =>
         Interlocked.Exchange(ref lastArpInjectionUtcTicks, DateTimeOffset.UtcNow.UtcTicks);
-
-    private void RecordArpInjectionSuccess() =>
-        Interlocked.Exchange(ref lastArpInjectionUtcTicks, DateTimeOffset.UtcNow.UtcTicks);
-
-    private void SendInjectionPacket(byte[] bytes)
-    {
-        var activeDevice = PacketInjectionPolicy.SelectHandle(arpDevice, forwardingDevice);
-        try
-        {
-            activeDevice.SendPacket(bytes);
-        }
-        catch (Exception exception)
-        {
-            Interlocked.Increment(ref injectionSendFailures);
-            var adapterName = profile?.Name ?? "unknown adapter";
-            throw new InvalidOperationException(
-                $"Npcap rejected a packet on '{adapterName}' ({bytes.Length} bytes): " +
-                $"{exception.Message}",
-                exception);
-        }
-    }
 
     private async Task AwaitBackgroundTaskAsync()
     {
