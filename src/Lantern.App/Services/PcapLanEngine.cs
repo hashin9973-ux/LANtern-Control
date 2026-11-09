@@ -561,7 +561,9 @@ public sealed class PcapLanEngine : IAsyncDisposable
                     DateTimeOffset.UtcNow);
                 if (observation.Warning is not null)
                 {
-                    IdentityAlertDetected?.Invoke(this, observation.Warning);
+                    NotifyObserver(
+                    "ARP identity alert",
+                    () => IdentityAlertDetected?.Invoke(this, observation.Warning));
                 }
 
                 continue;
@@ -840,7 +842,9 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
     private void OnTemporaryPresencePacketArrival(object sender, PacketCapture capture)
     {
-        var activeProfile = temporaryProbeProfile;
+        try
+        {
+            var activeProfile = temporaryProbeProfile;
         var targets = temporaryProbeTargets;
         var monitor = temporaryProbeIdentityMonitor;
         if (activeProfile is null ||
@@ -864,17 +868,31 @@ public sealed class PcapLanEngine : IAsyncDisposable
             observedAt);
         if (identity.Warning is not null)
         {
-            IdentityAlertDetected?.Invoke(this, identity.Warning);
+            NotifyObserver(
+                "ARP identity alert",
+                () => IdentityAlertDetected?.Invoke(this, identity.Warning));
         }
 
-        if (!identity.IsConflict)
+            if (!identity.IsConflict)
+            {
+                temporaryProbeResponders?.TryAdd(arp.SenderIp, 0);
+                registry.Observe(
+                    arp.SenderIp,
+                    arp.SenderMac,
+                    observedAt,
+                    GetKnownHostName(arp.SenderMac));
+            }
+        }
+        catch (Exception exception)
         {
-            temporaryProbeResponders?.TryAdd(arp.SenderIp, 0);
-            registry.Observe(
-                arp.SenderIp,
-                arp.SenderMac,
-                observedAt,
-                GetKnownHostName(arp.SenderMac));
+            diagnosticLog.Write(
+                "discovery.packet-callback-failed",
+                "temporary ARP discovery callback",
+                temporaryProbeProfile?.Name,
+                "running",
+                "A discovery-only ARP callback failed; controller forwarding is unaffected.",
+                exception);
+            RaiseStatus($"A discovery-only packet callback failed: {exception.Message}");
         }
     }
 
@@ -1055,9 +1073,22 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 ObserveArp(arp);
             }
         }
-        catch (Exception exception) when (!restoring)
+        catch (Exception exception)
         {
-            HandleBackgroundFailure("ARP packet handling failed", exception);
+            if (!restoring)
+            {
+                HandleBackgroundFailure("ARP packet handling failed", exception);
+            }
+            else
+            {
+                diagnosticLog.Write(
+                    "packet-callback.failed-during-stop",
+                    "ARP packet callback",
+                    profile?.Name,
+                    "stopping",
+                    "ARP callback failed while network restoration was in progress.",
+                    exception);
+            }
         }
     }
 
@@ -1155,11 +1186,13 @@ public sealed class PcapLanEngine : IAsyncDisposable
         if (DhcpHostNameParser.TryParse(bytes, out var dhcpHost))
         {
             registry.SetHostName(dhcpHost.MacAddress, dhcpHost.HostName);
-            DeviceIdentityLearned?.Invoke(
-                this,
-                new DeviceIdentityLearnedEventArgs(
-                    dhcpHost.MacAddress,
-                    dhcpHost.HostName));
+            NotifyObserver(
+                "device identity notification",
+                () => DeviceIdentityLearned?.Invoke(
+                    this,
+                    new DeviceIdentityLearnedEventArgs(
+                        dhcpHost.MacAddress,
+                        dhcpHost.HostName)));
         }
 
         var result = frameRouter.Route(bytes);
@@ -1175,13 +1208,15 @@ public sealed class PcapLanEngine : IAsyncDisposable
             result.ClientMac is not null &&
             result.Observation is { } observation)
         {
-            DeviceDomainObserved?.Invoke(
-                this,
-                new DeviceDomainObservedEventArgs(
-                    result.ClientMac,
-                    observation,
-                    DateTimeOffset.UtcNow,
-                    result.BlockedByDomain));
+            NotifyObserver(
+                "domain activity notification",
+                () => DeviceDomainObserved?.Invoke(
+                    this,
+                    new DeviceDomainObservedEventArgs(
+                        result.ClientMac,
+                        observation,
+                        DateTimeOffset.UtcNow,
+                        result.BlockedByDomain)));
         }
 
         if (result.Action == FrameAction.Forward && result.Frame is not null)
@@ -1555,9 +1590,11 @@ public sealed class PcapLanEngine : IAsyncDisposable
                     registry.SetHostName(mac, acceptedName);
                     if (isNewClaim)
                     {
-                        DeviceIdentityLearned?.Invoke(
-                            this,
-                            new DeviceIdentityLearnedEventArgs(mac, acceptedName));
+                        NotifyObserver(
+                            "device identity notification",
+                            () => DeviceIdentityLearned?.Invoke(
+                                this,
+                                new DeviceIdentityLearnedEventArgs(mac, acceptedName)));
                     }
 
                     return;
@@ -2092,18 +2129,67 @@ public sealed class PcapLanEngine : IAsyncDisposable
         });
     }
 
-    private void RaiseStatus(string message) => StatusChanged?.Invoke(this, message);
+    private void NotifyObserver(string component, Action notification)
+    {
+        try
+        {
+            notification();
+        }
+        catch (Exception exception)
+        {
+            diagnosticLog.Write(
+                "observer.notification-failed",
+                component,
+                profile?.Name,
+                controlling ? "running" : "stopping",
+                "A UI/inventory observer failed; packet processing continues.",
+                exception);
+        }
+    }
+
+    private void RaiseStatus(string message)
+    {
+        try
+        {
+            StatusChanged?.Invoke(this, message);
+        }
+        catch (Exception exception)
+        {
+            diagnosticLog.Write(
+                "observer.status-notification-failed",
+                "status notification",
+                profile?.Name,
+                controlling ? "running" : "stopping",
+                message,
+                exception);
+        }
+    }
 
     private void RaiseStateChanged(
         bool isRunning,
         string statusMessage,
         string? failureMessage = null,
-        bool? isHealthy = null) =>
-        StateChanged?.Invoke(
-            this,
-            new PcapEngineStateChangedEventArgs(
-                isRunning,
+        bool? isHealthy = null)
+    {
+        try
+        {
+            StateChanged?.Invoke(
+                this,
+                new PcapEngineStateChangedEventArgs(
+                    isRunning,
+                    statusMessage,
+                    failureMessage,
+                    isHealthy));
+        }
+        catch (Exception exception)
+        {
+            diagnosticLog.Write(
+                "observer.state-notification-failed",
+                "state notification",
+                profile?.Name,
+                isRunning ? "running" : "stopped",
                 statusMessage,
-                failureMessage,
-                isHealthy));
+                exception);
+        }
+    }
 }
