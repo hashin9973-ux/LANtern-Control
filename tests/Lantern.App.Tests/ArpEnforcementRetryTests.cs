@@ -48,6 +48,27 @@ public sealed class ArpEnforcementRetryTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_DoesNotTreatAnUnrelatedFailureAsSuccessfulCancellation()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var attempts = 0;
+
+        var execution = ArpEnforcementRetry.ExecuteAsync(
+            () =>
+            {
+                attempts++;
+                cancellation.Cancel();
+                throw new IOException("Send failed as cancellation was requested.");
+            },
+            cancellation.Token);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            async () => await execution);
+
+        Assert.Equal(1, attempts);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_StopsRetryingWhenCancelled()
     {
         using var cancellation = new CancellationTokenSource();
