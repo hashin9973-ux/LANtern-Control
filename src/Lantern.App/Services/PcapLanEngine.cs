@@ -32,6 +32,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
         new(StringComparer.OrdinalIgnoreCase);
     private CancellationTokenSource? engineCancellation;
     private Task? backgroundTask;
+    private Task? injectionWorkerTask;
     private BoundedPacketQueue? captureQueue;
     private PriorityPacketInjectionQueue? injectionQueue;
     private PcapRuntimeInfo? pcapRuntimeInfo;
@@ -242,11 +243,14 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 }
 
                 RaiseStatus($"Resolving gateway {adapter.GatewayAddress}…");
-                SendArpPacketDirect(
-                    EthernetFrameCodec.BuildArpRequest(
-                        adapter.LocalMac,
-                        adapter.LocalAddress,
-                        adapter.GatewayAddress));
+                await ArpEnforcementRetry.ExecuteAsync(
+                    () => SendArpPacketDirect(
+                        EthernetFrameCodec.BuildArpRequest(
+                            adapter.LocalMac,
+                            adapter.LocalAddress,
+                            adapter.GatewayAddress)),
+                    cancellationToken,
+                    OnInjectionRetry);
 
                 gatewayMac = await gatewayResolution.Task.WaitAsync(
                     TimeSpan.FromSeconds(4),
@@ -267,9 +271,10 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 RaiseStatus("Loading devices already observed by Windows…");
                 engineCancellation = new CancellationTokenSource();
                 captureQueue = new BoundedPacketQueue(CaptureQueueMaximumBytes);
-                injectionQueue = new PriorityPacketInjectionQueue(
+                var activeInjectionQueue = new PriorityPacketInjectionQueue(
                     ForwardingQueueMaximumBytes,
                     PriorityQueueMaximumBytes);
+                injectionQueue = activeInjectionQueue;
 
                 controlling = true;
                 var engineToken = engineCancellation.Token;
@@ -288,14 +293,16 @@ public sealed class PcapLanEngine : IAsyncDisposable
                     engineToken,
                     HandleBackgroundFailure);
 
+                injectionWorkerTask = activeInjectionQueue.RunAsync(
+                    SendInjectionPacket,
+                    () => controlling && !restoring,
+                    OnInjectionRetry,
+                    HandleBackgroundFailure,
+                    engineToken);
+                var activeInjectionWorkerTask = injectionWorkerTask;
                 var injectionTask = BackgroundLoopSupervisor.RunAsync(
                     "Npcap injection loop",
-                    () => injectionQueue.RunAsync(
-                        SendInjectionPacket,
-                        () => controlling && !restoring,
-                        OnInjectionRetry,
-                        HandleBackgroundFailure,
-                        engineToken),
+                    () => activeInjectionWorkerTask,
                     engineToken,
                     HandleBackgroundFailure);
 
@@ -860,6 +867,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
         engineCancellation?.Dispose();
         engineCancellation = null;
         backgroundTask = null;
+        injectionWorkerTask = null;
         captureQueue = null;
         injectionQueue = null;
         frameRouter = null;
@@ -1557,7 +1565,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private void SendArpPacket(byte[] bytes)
     {
         var activeQueue = injectionQueue;
-        if (activeQueue is null)
+        if (activeQueue is null || injectionWorkerTask?.IsCompleted == true)
         {
             SendArpPacketDirect(bytes);
             return;
@@ -1571,9 +1579,12 @@ public sealed class PcapLanEngine : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         var activeQueue = injectionQueue;
-        if (activeQueue is null)
+        if (activeQueue is null || injectionWorkerTask?.IsCompleted == true)
         {
-            SendArpPacketDirect(bytes);
+            await ArpEnforcementRetry.ExecuteAsync(
+                () => SendArpPacketDirect(bytes),
+                cancellationToken,
+                OnInjectionRetry);
             return;
         }
 
