@@ -1384,6 +1384,12 @@ public sealed class PcapLanEngine : IAsyncDisposable
         {
             ClearTransientDegraded("Forwarding injection queue");
         }
+
+        if (currentInjectionQueue is not null &&
+            currentInjectionQueue.PriorityQueueBytes <= PriorityQueueMaximumBytes / 4)
+        {
+            ClearTransientDegraded("ARP priority injection queue");
+        }
     }
 
     private string? GetLiveHealthWarning()
@@ -1927,11 +1933,27 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private void RecordArpInjectionSuccess() =>
         Interlocked.Exchange(ref lastArpInjectionUtcTicks, DateTimeOffset.UtcNow.UtcTicks);
 
-    private void RecordArpQueueLatency(TimeSpan latency) =>
+    private void RecordArpQueueLatency(TimeSpan latency)
+    {
         Interlocked.Exchange(ref lastArpQueueLatencyTicks, latency.Ticks);
+        var activeQueue = injectionQueue;
+        if (activeQueue is not null &&
+            activeQueue.PriorityQueueBytes <= PriorityQueueMaximumBytes / 4)
+        {
+            ClearTransientDegraded("ARP priority injection queue");
+        }
+    }
 
-    private void RecordForwardingQueueLatency(TimeSpan latency) =>
+    private void RecordForwardingQueueLatency(TimeSpan latency)
+    {
         Interlocked.Exchange(ref lastForwardingQueueLatencyTicks, latency.Ticks);
+        var activeQueue = injectionQueue;
+        if (activeQueue is not null &&
+            activeQueue.ForwardingQueueBytes <= ForwardingQueueMaximumBytes / 4)
+        {
+            ClearTransientDegraded("Forwarding injection queue");
+        }
+    }
 
     private void UpdatePerformanceMetrics(uint newlyReceivedPackets)
     {
