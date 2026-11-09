@@ -26,6 +26,11 @@ public static class ArpEnforcementRetry
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    throw new OperationCanceledException(cancellationToken);
+                }
+
                 lastFailure = exception;
                 if (attempt == MaxAttempts)
                 {
