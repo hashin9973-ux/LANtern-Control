@@ -1919,12 +1919,18 @@ public partial class MainWindow : Window
 
         PacketHealthText.Text =
             $"{health} · {snapshot.CaptureLibraryVersion} · {nativeName} · " +
-            $"rx {snapshot.CaptureReceivedPackets:N0} · kernel drops " +
-            $"{snapshot.CaptureKernelDroppedPackets:N0} · queue drops " +
+            $"capture {snapshot.CapturePacketsPerSecond:N0} pkt/s " +
+            $"{snapshot.CaptureBytesPerSecond / 1024:N0} KiB/s · " +
+            $"forward {snapshot.ForwardedPacketsPerSecond:N0} pkt/s " +
+            $"{snapshot.ForwardedBytesPerSecond / 1024:N0} KiB/s · " +
+            $"CPU {snapshot.ProcessCpuPercent:N1}% · " +
+            $"drops kernel {snapshot.CaptureKernelDroppedPackets:N0}, queue " +
             $"{snapshot.CaptureQueueDroppedPackets + snapshot.InjectionQueueDroppedPackets:N0} · " +
-            $"send errors {snapshot.InjectionSendFailures:N0} · retries " +
-            $"{snapshot.InjectionRetryAttempts:N0} · {queueBytes} · " +
-            $"capture {captureAge} · ARP send {arpAge}";
+            $"send errors {snapshot.InjectionSendFailures:N0}, retries " +
+            $"{snapshot.InjectionRetryAttempts:N0} · " +
+            $"ARP wait {snapshot.LastArpQueueLatencyMilliseconds:N1} ms, " +
+            $"forward wait {snapshot.LastForwardingQueueLatencyMilliseconds:N1} ms · " +
+            $"{queueBytes} · capture {captureAge} · ARP send {arpAge}";
 
         if (!string.IsNullOrWhiteSpace(snapshot.NativeLibraryError) ||
             !string.IsNullOrWhiteSpace(snapshot.CaptureStatisticsWarning))
