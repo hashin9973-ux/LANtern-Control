@@ -412,7 +412,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
                     null);
                 Volatile.Write(ref engineHealthy, 0);
                 controlling = false;
-                await StopCoreAsync();
+                await StopCoreAsync("startup-failure");
                 if (failure is not null)
                 {
                     throw new InvalidOperationException(failure, exception);
