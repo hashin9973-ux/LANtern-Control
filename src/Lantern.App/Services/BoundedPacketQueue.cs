@@ -4,9 +4,9 @@ using System.Threading.Channels;
 namespace Lantern.App.Services;
 
 /// <summary>
-/// A single-consumer packet queue with a strict byte budget. Packet data is
-/// copied before it is queued because SharpPcap's capture span is only valid
-/// until the next GetNextPacket call.
+/// A single-consumer capture queue with a strict byte budget. Captured data is
+/// copied only after reserving capacity because SharpPcap's packet span expires
+/// when GetNextPacket is called again.
 /// </summary>
 public sealed class BoundedPacketQueue
 {
@@ -33,22 +33,22 @@ public sealed class BoundedPacketQueue
 
     public bool TryWrite(ReadOnlySpan<byte> packet)
     {
-        if (packet.IsEmpty)
+        if (packet.IsEmpty || !TryReserve(packet.Length))
         {
             return false;
         }
 
-        var ownedPacket = packet.ToArray();
-        var currentBytes = Interlocked.Add(ref bufferedBytes, ownedPacket.LongLength);
-        if (currentBytes > maximumBufferedBytes)
+        try
         {
-            Interlocked.Add(ref bufferedBytes, -ownedPacket.LongLength);
-            return false;
+            packets.Enqueue(packet.ToArray());
+            signal.Writer.TryWrite(true);
+            return true;
         }
-
-        packets.Enqueue(ownedPacket);
-        signal.Writer.TryWrite(true);
-        return true;
+        catch
+        {
+            Interlocked.Add(ref bufferedBytes, -packet.Length);
+            throw;
+        }
     }
 
     public async ValueTask<byte[]> ReadAsync(CancellationToken cancellationToken = default)
@@ -62,6 +62,26 @@ public sealed class BoundedPacketQueue
             }
 
             await signal.Reader.ReadAsync(cancellationToken);
+        }
+    }
+
+    private bool TryReserve(int length)
+    {
+        while (true)
+        {
+            var current = Interlocked.Read(ref bufferedBytes);
+            if (length > maximumBufferedBytes - current)
+            {
+                return false;
+            }
+
+            if (Interlocked.CompareExchange(
+                    ref bufferedBytes,
+                    current + length,
+                    current) == current)
+            {
+                return true;
+            }
         }
     }
 }
