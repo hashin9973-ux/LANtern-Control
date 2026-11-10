@@ -42,23 +42,44 @@ public sealed class DeviceViewModelTests
         Assert.Equal("copy_script_AABBCCDDEEFF", viewModel.CopyAutomationScriptButtonAutomationId);
 
         var script = Lantern.App.Services.DeviceAutomationScriptBuilder.Build(viewModel);
-        Assert.Contains("$DeviceRowAutomationId = 'device_AABBCCDDEEFF'", script, StringComparison.Ordinal);
-        Assert.Contains("$DeviceNameAutomationId = 'device_name_AABBCCDDEEFF'", script, StringComparison.Ordinal);
-        Assert.Contains("$DownloadLimitAutomationId = 'download_limit_AABBCCDDEEFF'", script, StringComparison.Ordinal);
-        Assert.Contains("$UploadLimitAutomationId = 'upload_limit_AABBCCDDEEFF'", script, StringComparison.Ordinal);
         Assert.Contains("$PauseAutomationId = 'pause_AABBCCDDEEFF'", script, StringComparison.Ordinal);
-        Assert.Contains("[System.Windows.Automation.ValuePattern]::Pattern", script, StringComparison.Ordinal);
-        Assert.Contains("[System.Windows.Automation.TogglePattern]::Pattern", script, StringComparison.Ordinal);
+        Assert.Contains("$script:LanternPipeName = 'LANternControl.DeviceAutomation.v1'", script, StringComparison.Ordinal);
+        Assert.Contains("[System.IO.Pipes.NamedPipeClientStream]::new", script, StringComparison.Ordinal);
+        Assert.Contains("$request | ConvertTo-Json -Compress", script, StringComparison.Ordinal);
         Assert.Contains("# Set-LanternPaused -AutomationId $PauseAutomationId -Paused $true", script, StringComparison.Ordinal);
-        Assert.Contains("$OverviewInvokePattern.Invoke()", script, StringComparison.Ordinal);
-        Assert.Contains("[System.Windows.Automation.ScrollPattern]::Pattern", script, StringComparison.Ordinal);
-        Assert.Contains("[System.Windows.Automation.ScrollAmount]::LargeIncrement", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("System.Windows.Automation", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("nav_overview", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("ScrollPattern", script, StringComparison.Ordinal);
 
         viewModel.EditableName = "Renamed device";
 
         Assert.Equal(rowAutomationId, viewModel.RowAutomationId);
         Assert.Equal("pause_AABBCCDDEEFF", viewModel.PauseAutomationId);
         Assert.Equal("copy_script_AABBCCDDEEFF", viewModel.CopyAutomationScriptButtonAutomationId);
+    }
+
+    [Fact]
+    public async Task SetPauseInternetAsync_AwaitsTheRuleApplication()
+    {
+        var applyRule = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var callbackCount = 0;
+        var viewModel = new DeviceViewModel(
+            _ =>
+            {
+                callbackCount++;
+                return applyRule.Task;
+            });
+
+        var update = viewModel.SetPauseInternetAsync(paused: true);
+
+        Assert.True(viewModel.PauseInternet);
+        Assert.True(viewModel.HasActiveRule);
+        Assert.Equal(1, callbackCount);
+        Assert.False(update.IsCompleted);
+
+        applyRule.SetResult();
+        await update;
     }
 
     [Fact]
