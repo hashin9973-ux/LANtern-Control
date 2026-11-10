@@ -76,6 +76,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private long injectionQueueDroppedPackets;
     private long lastCaptureUtcTicks;
     private long lastArpInjectionUtcTicks;
+    private long lastArpEnforcementUtcTicks;
     private long lastForwardedInjectionUtcTicks;
     private LibPcapLiveDevice? arpDevice;
     private LibPcapLiveDevice? forwardingDevice;
@@ -170,6 +171,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             TimeSpan.FromTicks(Interlocked.Read(ref lastForwardingQueueLatencyTicks)).TotalMilliseconds,
             ReadTimestamp(Interlocked.Read(ref lastCaptureUtcTicks)),
             ReadTimestamp(Interlocked.Read(ref lastArpInjectionUtcTicks)),
+            ReadTimestamp(Interlocked.Read(ref lastArpEnforcementUtcTicks)),
             ReadTimestamp(Interlocked.Read(ref lastForwardedInjectionUtcTicks)),
             ReadTimestamp(Interlocked.Read(ref lastInjectionHandleRecoveryUtcTicks)),
             Volatile.Read(ref captureStatisticsWarning),
@@ -280,6 +282,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             Interlocked.Exchange(ref injectionSendFailures, 0);
             Interlocked.Exchange(ref lastCaptureUtcTicks, 0);
             Interlocked.Exchange(ref lastArpInjectionUtcTicks, 0);
+            Interlocked.Exchange(ref lastArpEnforcementUtcTicks, 0);
             Interlocked.Exchange(ref lastForwardedInjectionUtcTicks, 0);
             captureStatisticsInitialized = false;
             captureStatisticsWarning = null;
@@ -1472,17 +1475,17 @@ public sealed class PcapLanEngine : IAsyncDisposable
         var nowUtcTicks = DateTimeOffset.UtcNow.UtcTicks;
         var hasInterceptionTargets = clientMappings.Mappings.Any(
             client => policy.GetInterceptionTargets(client.Value.ToString()) != InterceptionTargets.None);
-        var lastArpInjectionUtcTicks = Interlocked.Read(ref this.lastArpInjectionUtcTicks);
+        var lastArpEnforcementUtcTicks = Interlocked.Read(ref this.lastArpEnforcementUtcTicks);
         if (ArpEnforcementHealthPolicy.IsStale(
                 hasInterceptionTargets,
-                lastArpInjectionUtcTicks,
+                lastArpEnforcementUtcTicks,
                 nowUtcTicks,
                 MaximumArpEnforcementSilence))
         {
-            var age = lastArpInjectionUtcTicks <= 0
-                ? "no successful ARP injection has been recorded"
-                : $"the last successful ARP injection was " +
-                  $"{TimeSpan.FromTicks(nowUtcTicks - lastArpInjectionUtcTicks).TotalSeconds:N1} seconds ago";
+            var age = lastArpEnforcementUtcTicks <= 0
+                ? "no successful paused-device enforcement injection has been recorded"
+                : $"the last successful paused-device enforcement injection was " +
+                  $"{TimeSpan.FromTicks(nowUtcTicks - lastArpEnforcementUtcTicks).TotalSeconds:N1} seconds ago";
             return $"Paused-device ARP enforcement is stale: {age}.";
         }
 
@@ -1815,7 +1818,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             client.Value);
         foreach (var frame in frames.Select(targets))
         {
-            SendArpPacket(frame);
+            SendArpPacket(frame, isEnforcement: true);
         }
 
         var controllerFrames = ArpInterceptionFrames.BuildControllerProtection(
@@ -1825,8 +1828,8 @@ public sealed class PcapLanEngine : IAsyncDisposable
             activeProfile.GatewayAddress,
             client.Value,
             client.Key);
-        SendArpPacket(controllerFrames.ClientToController);
-        SendArpPacket(controllerFrames.GatewayToController);
+        SendArpPacket(controllerFrames.ClientToController, isEnforcement: true);
+        SendArpPacket(controllerFrames.GatewayToController, isEnforcement: true);
     }
 
     private async Task ApplyInterceptionTransitionAsync(
@@ -1915,7 +1918,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 activeGatewayMac,
                 request.SenderIp,
                 requestingClient);
-            SendArpPacket(frames.ToClient);
+            SendArpPacket(frames.ToClient, isEnforcement: true);
             return;
         }
 
@@ -1934,16 +1937,16 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 activeGatewayMac,
                 request.TargetIp,
                 requestedClient);
-            SendArpPacket(frames.ToGateway);
+            SendArpPacket(frames.ToGateway, isEnforcement: true);
         }
     }
 
-    private void SendArpPacket(byte[] bytes)
+    private void SendArpPacket(byte[] bytes, bool isEnforcement = false)
     {
         var activeQueue = injectionQueue;
         if (activeQueue is null || injectionWorkerTask?.IsCompleted == true)
         {
-            SendArpPacketDirect(bytes);
+            SendArpPacketDirect(bytes, isEnforcement);
             return;
         }
 
@@ -1951,7 +1954,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
         {
             activeQueue.EnqueuePriority(
             bytes,
-            RecordArpInjectionSuccess,
+            isEnforcement ? RecordArpEnforcementSuccess : RecordArpInjectionSuccess,
             RecordArpQueueLatency);
         }
         catch (InvalidOperationException exception)
@@ -1991,10 +1994,17 @@ public sealed class PcapLanEngine : IAsyncDisposable
         }
     }
 
-    private void SendArpPacketDirect(byte[] bytes)
+    private void SendArpPacketDirect(byte[] bytes, bool isEnforcement = false)
     {
         SendInjectionPacket(bytes, "ARP");
-        RecordArpInjectionSuccess();
+        if (isEnforcement)
+        {
+            RecordArpEnforcementSuccess();
+        }
+        else
+        {
+            RecordArpInjectionSuccess();
+        }
     }
 
     private void SendInjectionPacket(byte[] bytes) =>
@@ -2117,6 +2127,14 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private void RecordArpInjectionSuccess()
     {
         Interlocked.Exchange(ref lastArpInjectionUtcTicks, DateTimeOffset.UtcNow.UtcTicks);
+        RefreshEngineHealth();
+    }
+
+    private void RecordArpEnforcementSuccess()
+    {
+        var nowUtcTicks = DateTimeOffset.UtcNow.UtcTicks;
+        Interlocked.Exchange(ref lastArpEnforcementUtcTicks, nowUtcTicks);
+        Interlocked.Exchange(ref lastArpInjectionUtcTicks, nowUtcTicks);
         RefreshEngineHealth();
     }
 
