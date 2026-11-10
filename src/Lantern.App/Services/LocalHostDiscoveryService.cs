@@ -26,8 +26,7 @@ public sealed record LocalHostDiscoveryResult(
     IReadOnlyList<DiscoveredHost> Hosts,
     int CandidateHosts,
     int SkippedRecentlyObserved = 0,
-    int ProbeAttempts = 0,
-    bool RateLimited = false)
+    int ProbeAttempts = 0)
 {
     public int IcmpHosts => Hosts.Count(host => host.Method == HostDiscoveryMethod.Icmp);
 
@@ -42,10 +41,7 @@ public sealed record LocalHostDiscoveryResult(
     public int MdnsServiceHosts =>
         Hosts.Count(host => host.Method == HostDiscoveryMethod.MdnsServiceBrowse);
 
-    public string StatusMessage => RateLimited
-        ? $"Supplemental protocol discovery skipped for {CandidateHosts} unconfirmed candidate(s): " +
-          "this adapter was scanned less than 60 seconds ago."
-        : CandidateHosts == 0
+    public string StatusMessage => CandidateHosts == 0
             ? SkippedRecentlyObserved > 0
                 ? $"No supplemental probes were sent; {SkippedRecentlyObserved} local address(es) " +
                   "already had recent reachability evidence."
@@ -57,16 +53,14 @@ public sealed record LocalHostDiscoveryResult(
               "(at least 5 ms between starts, at most 200 starts per second, " +
               "up to two link-local multicast queries, then no more than 5 direct probes " +
               "per remaining address, at most 64 concurrent hosts, " +
-              "and one pass per minute). " +
               $"SSDP {SsdpHosts}, DNS-SD/mDNS {MdnsServiceHosts}, ICMP {IcmpHosts}, " +
               $"TCP {TcpHosts}, NetBIOS {NetBiosHosts}, reverse mDNS {MdnsHosts}.";
 }
 
 /// <summary>
-/// Performs a supplemental, explicitly requested reachability check for local
-/// IPv4 addresses that did not already produce recent ARP or traffic evidence.
-/// Probes share one global pacer and are bounded per host. This service is never
-/// started by the background monitoring loop.
+/// Performs a supplemental reachability check for scheduled or explicitly requested
+/// discovery scans, targeting local IPv4 addresses without recent ARP or traffic
+/// evidence. Probes share one global pacer and are bounded per host.
 /// </summary>
 public sealed class LocalHostDiscoveryService
 {
@@ -82,8 +76,6 @@ public sealed class LocalHostDiscoveryService
 
     private readonly SemaphoreSlim scanSync = new(1, 1);
     private readonly SemaphoreSlim probeStartSync = new(1, 1);
-    private readonly Dictionary<string, DateTimeOffset> lastScanStartedAt =
-        new(StringComparer.Ordinal);
     private readonly LocalMulticastDiscoveryService multicastDiscoveryService = new();
     private long nextProbeTimestamp;
 
@@ -109,21 +101,6 @@ public sealed class LocalHostDiscoveryService
                     0,
                     skippedRecentlyObserved);
             }
-
-            var scanStartedAt = DateTimeOffset.UtcNow;
-            if (lastScanStartedAt.TryGetValue(adapter.Id, out var previousScanAt) &&
-                !DeviceProbePolicy.IsDiscoveryScanDue(previousScanAt, scanStartedAt))
-            {
-                return new LocalHostDiscoveryResult(
-                    [],
-                    targets.Count,
-                    skippedRecentlyObserved,
-                    RateLimited: true);
-            }
-
-            // Record the start, not completion, so concurrent callers and cancelled
-            // scans cannot immediately start another full protocol pass.
-            lastScanStartedAt[adapter.Id] = scanStartedAt;
 
             var probeAttempts = 0;
             void CountProbeAttempt() => Interlocked.Increment(ref probeAttempts);

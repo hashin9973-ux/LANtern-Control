@@ -287,11 +287,10 @@ public sealed class DeviceProbePolicyTests
     }
 
     [Fact]
-    public void DiscoveryArpRequestSpacing_IsPacedForFastBoundedBursts()
+    public void DiscoveryArpRequestSpacing_RemainsPacedForFastBoundedBursts()
     {
         Assert.Equal(TimeSpan.FromMilliseconds(10), DeviceProbePolicy.DiscoveryRequestSpacing);
         Assert.Equal(TimeSpan.FromMilliseconds(10), DeviceProbePolicy.DiscoveryRetrySpacing);
-        Assert.Equal(TimeSpan.FromSeconds(60), DeviceProbePolicy.DiscoveryInterval);
         Assert.Equal(253, DeviceProbePolicy.MaxDiscoveryTargetsPerScan);
     }
 
@@ -321,17 +320,6 @@ public sealed class DeviceProbePolicyTests
         Assert.DoesNotContain(secondObserved, targets);
         Assert.DoesNotContain(local, targets);
         Assert.DoesNotContain(gateway, targets);
-    }
-
-    [Fact]
-    public void IsDiscoveryScanDue_EnforcesThePerAdapterOneMinuteInterval()
-    {
-        var now = DateTimeOffset.Parse("2026-11-06T12:00:00Z");
-
-        Assert.True(DeviceProbePolicy.IsDiscoveryScanDue(null, now));
-        Assert.False(DeviceProbePolicy.IsDiscoveryScanDue(now.AddSeconds(-59), now));
-        Assert.True(DeviceProbePolicy.IsDiscoveryScanDue(now.AddSeconds(-60), now));
-        Assert.True(DeviceProbePolicy.IsDiscoveryScanDue(now.AddSeconds(10), now));
     }
 
 }

@@ -78,16 +78,19 @@ public sealed class LocalHostDiscoveryServiceTests
     }
 
     [Fact]
-    public void StatusMessage_ExplainsTheIndependentOneMinuteCooldown()
+    public void StatusMessage_ReportsPacingWithoutAHiddenOneMinuteThrottle()
     {
         var result = new LocalHostDiscoveryResult(
-            [],
+            [new DiscoveredHost(
+                System.Net.IPAddress.Parse("192.168.31.20"),
+                HostDiscoveryMethod.Icmp,
+                4)],
             CandidateHosts: 40,
             SkippedRecentlyObserved: 212,
-            RateLimited: true);
+            ProbeAttempts: 1);
 
-        Assert.Contains("40 unconfirmed candidate(s)", result.StatusMessage, StringComparison.Ordinal);
-        Assert.Contains("less than 60 seconds ago", result.StatusMessage, StringComparison.Ordinal);
+        Assert.Contains("at most 200 starts per second", result.StatusMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain("one pass per minute", result.StatusMessage, StringComparison.Ordinal);
     }
 
 }

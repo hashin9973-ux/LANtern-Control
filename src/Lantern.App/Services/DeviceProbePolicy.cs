@@ -5,8 +5,8 @@ using Lantern.Core.Networking;
 namespace Lantern.App.Services;
 
 /// <summary>
-/// Selects known addresses for low-rate presence checks and, separately,
-/// candidate addresses for an explicitly requested local-network discovery pass.
+/// Selects known addresses for low-rate presence checks and candidate addresses
+/// for scheduled or manually requested local-network discovery passes.
 /// </summary>
 public static class DeviceProbePolicy
 {
@@ -24,8 +24,6 @@ public static class DeviceProbePolicy
     public static TimeSpan DiscoveryRequestSpacing { get; } = TimeSpan.FromMilliseconds(10);
 
     public static TimeSpan DiscoveryRetrySpacing { get; } = TimeSpan.FromMilliseconds(10);
-
-    public static TimeSpan DiscoveryInterval { get; } = TimeSpan.FromSeconds(60);
 
     public const int MaxDiscoveryTargetsPerScan = 253;
 
@@ -109,15 +107,6 @@ public static class DeviceProbePolicy
         return GetDiscoveryTargets(adapter)
             .Where(address => !recentlyObserved.Contains(address))
             .ToArray();
-    }
-
-    public static bool IsDiscoveryScanDue(
-        DateTimeOffset? lastScanAt,
-        DateTimeOffset now)
-    {
-        return lastScanAt is null ||
-               now < lastScanAt.Value ||
-               now - lastScanAt.Value >= DiscoveryInterval;
     }
 
     private static uint ToUInt32(IPAddress address)

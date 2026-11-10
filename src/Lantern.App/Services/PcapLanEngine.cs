@@ -32,7 +32,6 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private readonly ArpIdentityMonitor identityMonitor = new();
     private readonly ConcurrentDictionary<IPAddress, DateTimeOffset> lastPresenceProbeAt = new();
     private DateTimeOffset lastPresenceProbeBatchAt = DateTimeOffset.MinValue;
-    private DateTimeOffset lastDiscoveryProbeBatchAt = DateTimeOffset.MinValue;
     private string? presenceProbeAdapterId;
     private readonly ResolvedDeviceNameClaims resolvedNameClaims = new(Dns.GetHostName());
     private readonly ConcurrentDictionary<string, byte> resolvingNames =
@@ -246,7 +245,6 @@ public sealed class PcapLanEngine : IAsyncDisposable
             lastPresenceProbeAt.Clear();
             lastPresenceProbeBatchAt = DateTimeOffset.MinValue;
             presenceProbeAdapterId = adapter.Id;
-            lastDiscoveryProbeBatchAt = DateTimeOffset.MinValue;
             resolvedNameClaims.Reset(rejectedResolvedNames);
             resolvingNames.Clear();
             registry.BeginSession();
@@ -653,20 +651,16 @@ public sealed class PcapLanEngine : IAsyncDisposable
         {
             lastPresenceProbeAt.Clear();
             lastPresenceProbeBatchAt = DateTimeOffset.MinValue;
-            lastDiscoveryProbeBatchAt = DateTimeOffset.MinValue;
             presenceProbeAdapterId = activeProfile.Id;
         }
 
         var now = DateTimeOffset.UtcNow;
-        var previousBatchAt = discoverSubnet
-            ? lastDiscoveryProbeBatchAt
-            : lastPresenceProbeBatchAt;
-        var minimumInterval = discoverSubnet
-            ? DeviceProbePolicy.DiscoveryInterval
-            : DeviceProbePolicy.ProbeInterval;
-        if (previousBatchAt != DateTimeOffset.MinValue &&
-            now >= previousBatchAt &&
-            now - previousBatchAt < minimumInterval)
+        // Full subnet discovery is scheduled by the UI's auto-scan interval.
+        // Keep the separate cooldown for background presence checks.
+        if (!discoverSubnet &&
+            lastPresenceProbeBatchAt != DateTimeOffset.MinValue &&
+            now >= lastPresenceProbeBatchAt &&
+            now - lastPresenceProbeBatchAt < DeviceProbePolicy.ProbeInterval)
         {
             return DiscoveryProbeResult.Empty;
         }
@@ -701,21 +695,9 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
         void MarkBatchStarted()
         {
-            if (discoverSubnet)
-            {
-                lastDiscoveryProbeBatchAt = DateTimeOffset.UtcNow;
-            }
-            else
+            if (!discoverSubnet)
             {
                 lastPresenceProbeBatchAt = DateTimeOffset.UtcNow;
-            }
-        }
-
-        void MarkBatchCompleted()
-        {
-            if (discoverSubnet)
-            {
-                lastDiscoveryProbeBatchAt = DateTimeOffset.UtcNow;
             }
         }
 
@@ -755,7 +737,6 @@ public sealed class PcapLanEngine : IAsyncDisposable
                     });
             }
 
-            MarkBatchCompleted();
             return new DiscoveryProbeResult(
                 firstPassSent + retrySent,
                 retrySent,

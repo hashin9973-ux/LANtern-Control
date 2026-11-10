@@ -24,12 +24,12 @@ public sealed class DiscoveryRefreshResultTests
     }
 
     [Fact]
-    public void StatusMessage_ReportsWhenDiscoveryIsRateLimited()
+    public void StatusMessage_ReportsWhenNoArpDiscoveryRequestsWereNeeded()
     {
         var result = new DiscoveryRefreshResult(3, 4);
 
         Assert.Equal(
-            "Device inventory refreshed — 3 neighbor-cache entries, 4 known devices. No discovery requests were sent; local-network discovery is limited to one pass per minute.",
+            "Device inventory refreshed — 3 neighbor-cache entries, 4 known devices. No ARP discovery requests were needed during this pass.",
             result.StatusMessage);
     }
 

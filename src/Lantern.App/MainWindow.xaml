@@ -681,7 +681,7 @@
                                      BorderThickness="1"
                                      Text="60"
                                      MaxLength="4"
-                                     ToolTip="Automatic scan interval in seconds (60–3600)"
+                                     ToolTip="Automatic device discovery interval in seconds (1–3600)"
                                      LostFocus="AutoScanIntervalTextBox_OnLostFocus" />
                             <TextBlock Margin="5,0,0,0"
                                        VerticalAlignment="Center"

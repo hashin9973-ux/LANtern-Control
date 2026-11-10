@@ -27,7 +27,7 @@ namespace Lantern.App;
 public partial class MainWindow : Window
 {
     private const int MaxWebsiteActivityRows = 250;
-    private const int MinimumAutoScanIntervalSeconds = 60;
+    private const int MinimumAutoScanIntervalSeconds = 1;
     private const int MaximumAutoScanIntervalSeconds = 3600;
     private const int MinimumScriptIntervalSeconds = 60;
     private const int MaximumScriptIntervalSeconds = 3600;
@@ -330,7 +330,7 @@ public partial class MainWindow : Window
             settingsDirty = false;
             ConfigureAutoScanTimer();
             DetailStatusText.Text = enabled
-                ? $"Automatic inventory refresh enabled: the Windows neighbor cache is refreshed every {settings.AutoScanIntervalSeconds} seconds."
+                ? $"Automatic device discovery enabled: the local network is scanned every {settings.AutoScanIntervalSeconds} seconds."
                 : "Automatic device discovery disabled.";
         }
         catch (IOException exception)
@@ -372,7 +372,7 @@ public partial class MainWindow : Window
             if (settings.AutoScanEnabled)
             {
                 DetailStatusText.Text =
-                    $"Automatic inventory refresh will run every {settings.AutoScanIntervalSeconds} seconds.";
+                    $"Automatic device discovery will run every {settings.AutoScanIntervalSeconds} seconds.";
             }
         }
         catch (IOException exception)
@@ -928,8 +928,8 @@ public partial class MainWindow : Window
             var scanStartedAt = DateTimeOffset.UtcNow;
             SetStatus(
                 isAutomatic
-                    ? $"Automatic inventory refresh running (every {settings.AutoScanIntervalSeconds} seconds)…"
-                    : "Refreshing the neighbor cache and performing fast, paced ARP discovery first…",
+                    ? $"Automatic device discovery running (every {settings.AutoScanIntervalSeconds} seconds)…"
+                    : "Refreshing the neighbor cache and performing fast, paced ARP discovery…",
                 null);
 
             DiscoveryRefreshResult arpResult;
@@ -937,52 +937,46 @@ public partial class MainWindow : Window
             LocalHostDiscoveryResult hostResult = new([], 0);
             string? hostFailure = null;
 
-            if (isAutomatic)
+            // Automatic and manual scans use the same discovery pipeline. A
+            // neighbor-cache-only refresh cannot discover clients that are not
+            // already present in Windows' neighbor cache.
+            try
             {
-                // The engine already performs paced presence probes while controlling.
-                // A periodic full-subnet scan competes with packet forwarding and can
-                // create avoidable CPU/network load. Automatic refresh is inventory-only.
-                arpResult = await engine.RefreshNeighborsAsync();
+                arpResult = await engine.ScanDevicesAsync(adapter);
             }
-            else
+            catch (Exception exception)
             {
-                // Explicit manual scans may perform the full discovery pass.
-                try
-                {
-                    arpResult = await engine.ScanDevicesAsync(adapter);
-                }
-                catch (Exception exception)
-                {
-                    arpFailure = exception.Message;
-                    arpResult = new DiscoveryRefreshResult(
-                        0,
-                        registry.Peek().Count,
-                        ProbeWarning: exception.Message);
-                }
+                arpFailure = exception.Message;
+                arpResult = new DiscoveryRefreshResult(
+                    0,
+                    registry.Peek().Count,
+                    ProbeWarning: exception.Message);
+            }
 
-                var observationTime = DateTimeOffset.UtcNow;
-                var recentlyObservedAddresses = registry.Peek()
-                    .Where(snapshot =>
-                        DevicePresencePolicy.Classify(snapshot.LastSeen, observationTime) ==
-                        DevicePresence.Online)
-                    .Select(snapshot => snapshot.IpAddress)
-                    .ToHashSet();
+            var observationTime = DateTimeOffset.UtcNow;
+            var recentlyObservedAddresses = registry.Peek()
+                .Where(snapshot =>
+                    DevicePresencePolicy.Classify(snapshot.LastSeen, observationTime) ==
+                    DevicePresence.Online)
+                .Select(snapshot => snapshot.IpAddress)
+                .ToHashSet();
 
-                SetStatus(
-                    "Checking only addresses without recent reachability evidence using faster paced protocol fallbacks…",
-                    null);
+            SetStatus(
+                isAutomatic
+                    ? "Checking unconfirmed local addresses using paced protocol discovery…"
+                    : "Checking only addresses without recent reachability evidence using paced protocol fallbacks…",
+                null);
 
-                try
-                {
-                    hostResult = await localHostDiscoveryService.ScanAsync(
-                        adapter,
-                        recentlyObservedAddresses);
-                }
-                catch (Exception exception)
-                {
-                    hostFailure = exception.Message;
-                    hostResult = new LocalHostDiscoveryResult([], 0);
-                }
+            try
+            {
+                hostResult = await localHostDiscoveryService.ScanAsync(
+                    adapter,
+                    recentlyObservedAddresses);
+            }
+            catch (Exception exception)
+            {
+                hostFailure = exception.Message;
+                hostResult = new LocalHostDiscoveryResult([], 0);
             }
 
             var liveMacByIp = registry.Peek()
@@ -1040,7 +1034,7 @@ public partial class MainWindow : Window
 
             if (isAutomatic)
             {
-                status = $"Automatic inventory refresh completed ({settings.AutoScanIntervalSeconds}-second interval). {status}";
+                status = $"Automatic device discovery completed ({settings.AutoScanIntervalSeconds}-second interval). {status}";
             }
 
             DetailStatusText.Text = status;
