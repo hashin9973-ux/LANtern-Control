@@ -35,7 +35,7 @@ use case.
 - Keep a ten-minute network activity chart with 2.5-second samples.
 - Apply independent download and upload limits in `KB/s`.
 - Pause and restore a device's IPv4 internet connection.
-- Copy a complete, device-specific PowerShell UI Automation script directly from each device row.
+- Copy a complete, device-specific PowerShell script for focus-free background pause/resume automation.
 - Edit, save, and run PowerShell scripts in the Windows app from the dedicated **Script automation** page, with an optional configurable schedule.
 - Observe domains through DNS queries, TLS server names, and plain HTTP host
   headers without decrypting private HTTPS content.
@@ -104,7 +104,7 @@ be built from source with `scripts/publish.ps1`; see [Building from source](#bui
 
 ### Windows portable version
 
-1. Download `LANtern-Control-v0.1.11-win-x64.zip`.
+1. Download `LANtern-Control-v0.1.20-win-x64.zip`.
 2. Extract the complete archive to a folder where it can remain.
 3. Run `LANtern Control.exe` as Administrator from that folder. Keep the
    extracted files together; no application installation is required.
