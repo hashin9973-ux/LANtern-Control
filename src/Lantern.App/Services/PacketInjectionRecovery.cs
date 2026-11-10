@@ -2,8 +2,8 @@ namespace Lantern.App.Services;
 
 /// <summary>
 /// Executes a packet send with one bounded handle-reopen attempt. A replacement
-/// handle is returned only after it has transmitted the exact same frame that
-/// failed on the previous handle.
+/// handle is returned only after its send function accepts the exact same frame
+/// that failed on the previous handle.
 /// </summary>
 public static class PacketInjectionRecovery
 {
