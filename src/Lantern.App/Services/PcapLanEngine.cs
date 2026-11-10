@@ -132,6 +132,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
         return new PcapEngineHealthSnapshot(
             IsRunning,
             IsHealthy,
+            injectionDevice?.Opened == true,
             backgroundFailure ??
                 GetTransientDegradedReason() ??
                 Volatile.Read(ref captureStatisticsWarning) ??
@@ -162,6 +163,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             ReadTimestamp(Interlocked.Read(ref lastCaptureUtcTicks)),
             ReadTimestamp(Interlocked.Read(ref lastArpInjectionUtcTicks)),
             ReadTimestamp(Interlocked.Read(ref lastForwardedInjectionUtcTicks)),
+            ReadTimestamp(Interlocked.Read(ref lastInjectionHandleRecoveryUtcTicks)),
             Volatile.Read(ref captureStatisticsWarning),
             runtime?.Error);
     }
