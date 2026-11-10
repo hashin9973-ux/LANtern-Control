@@ -30,6 +30,7 @@ public sealed record PcapEngineHealthSnapshot(
     double LastForwardingQueueLatencyMilliseconds,
     DateTimeOffset? LastCaptureAtUtc,
     DateTimeOffset? LastArpInjectionAtUtc,
+    DateTimeOffset? LastArpEnforcementAtUtc,
     DateTimeOffset? LastForwardedInjectionAtUtc,
     DateTimeOffset? LastInjectionHandleRecoveryAtUtc,
     string? CaptureStatisticsWarning,
