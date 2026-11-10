@@ -33,7 +33,7 @@ public sealed class ArpEnforcementHealthPolicyTests
         const long now = TimeSpan.TicksPerSecond * 60;
         Assert.False(ArpEnforcementHealthPolicy.IsStale(
             hasInterceptionTargets: true,
-            lastSuccessfulInjectionUtcTicks: now - TimeSpan.TicksPerSecond * 10,
+            lastSuccessfulEnforcementUtcTicks: now - TimeSpan.TicksPerSecond * 10,
             nowUtcTicks: now,
             MaximumSilence));
     }
@@ -44,7 +44,7 @@ public sealed class ArpEnforcementHealthPolicyTests
         const long now = TimeSpan.TicksPerSecond * 60;
         Assert.True(ArpEnforcementHealthPolicy.IsStale(
             hasInterceptionTargets: true,
-            lastSuccessfulInjectionUtcTicks: now - TimeSpan.TicksPerSecond * 16,
+            lastSuccessfulEnforcementUtcTicks: now - TimeSpan.TicksPerSecond * 16,
             nowUtcTicks: now,
             MaximumSilence));
     }
