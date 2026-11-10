@@ -1797,11 +1797,6 @@ public partial class MainWindow : Window
             preferences.Alias,
             device.Alias,
             StringComparison.Ordinal);
-        preferences.DownloadKiloBytesPerSecond = rule.DownloadKiloBytesPerSecond;
-        preferences.UploadKiloBytesPerSecond = rule.UploadKiloBytesPerSecond;
-        preferences.PauseInternet = rule.PauseInternet;
-        preferences.Alias = device.Alias;
-
         try
         {
             if (ruleChanged)
@@ -1809,6 +1804,10 @@ public partial class MainWindow : Window
                 await engine.ApplyRuleAsync(device.MacKey, rule);
             }
 
+            preferences.DownloadKiloBytesPerSecond = rule.DownloadKiloBytesPerSecond;
+            preferences.UploadKiloBytesPerSecond = rule.UploadKiloBytesPerSecond;
+            preferences.PauseInternet = rule.PauseInternet;
+            preferences.Alias = device.Alias;
             await settingsStore.SaveAsync(settings);
             settingsDirty = false;
             await Dispatcher.InvokeAsync(
