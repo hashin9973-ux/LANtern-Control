@@ -29,8 +29,8 @@ public sealed class DeviceAutomationPipeServerTests
             new DeviceAutomationRequest(1, "SetPaused", "pause_AABBCCDDEEFF", true));
 
         Assert.NotNull(received);
-        Assert.Equal("pause_AABBCCDDEEFF", received.AutomationId);
-        Assert.True(received.Paused);
+        Assert.Equal("pause_AABBCCDDEEFF", received!.AutomationId);
+        Assert.True(received!.Paused);
         Assert.True(response.Success);
         Assert.Equal("Test phone", response.DeviceName);
         Assert.True(response.Paused);
@@ -56,7 +56,7 @@ public sealed class DeviceAutomationPipeServerTests
 
         Assert.False(handlerCalled);
         Assert.False(response.Success);
-        Assert.Contains("identifier is invalid", response.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("identifier is invalid", response.Error ?? string.Empty, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -73,7 +73,7 @@ public sealed class DeviceAutomationPipeServerTests
             new DeviceAutomationRequest(2, "SetPaused", "pause_AABBCCDDEEFF", true));
 
         Assert.False(response.Success);
-        Assert.Contains("protocol version", response.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("protocol version", response.Error ?? string.Empty, StringComparison.OrdinalIgnoreCase);
     }
 
     private static async Task<DeviceAutomationResponse> SendRequestAsync(
