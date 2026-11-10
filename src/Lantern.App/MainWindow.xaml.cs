@@ -47,6 +47,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer autoScanTimer;
     private readonly DispatcherTimer scriptAutomationTimer;
     private readonly PowerShellScriptRunner scriptRunner = new();
+    private readonly DeviceAutomationPipeServer deviceAutomationPipeServer;
     private readonly CancellationTokenSource scriptRunCancellation = new();
     private Task? activeScriptRunTask;
     private bool scriptRunInProgress;
@@ -78,6 +79,7 @@ public partial class MainWindow : Window
         SidebarVersionText.Text = VersionText;
         DomainPresetSelector.ItemsSource = DomainPresets;
         engine = new PcapLanEngine(registry, policy);
+        deviceAutomationPipeServer = new DeviceAutomationPipeServer(HandleDeviceAutomationRequestAsync);
         engine.StatusChanged += Engine_OnStatusChanged;
         engine.StateChanged += Engine_OnStateChanged;
         engine.DeviceIdentityLearned += Engine_OnDeviceIdentityLearned;
@@ -195,6 +197,7 @@ public partial class MainWindow : Window
         }
 
         UpdateButtons();
+        deviceAutomationPipeServer.Start();
         await CheckForUpdatesAsync();
     }
 
@@ -880,6 +883,38 @@ public partial class MainWindow : Window
             activeScriptRunTask = null;
             UpdateScriptAutomationControls();
         }
+    }
+
+    private Task<DeviceAutomationResponse> HandleDeviceAutomationRequestAsync(
+        DeviceAutomationRequest request)
+    {
+        var operation = Dispatcher.InvokeAsync(
+            async () =>
+            {
+                var automationId = request.AutomationId!;
+                var macKey = automationId["pause_".Length..];
+                if (!deviceIndex.TryGetValue(macKey, out var device))
+                {
+                    return DeviceAutomationResponse.Failed(
+                        "The target device is not currently present in LANtern's device list. Scan for devices and try again.");
+                }
+
+                if (!device.CanControl)
+                {
+                    return DeviceAutomationResponse.Failed(
+                        "The target device is inventory-only or protected and cannot be paused.");
+                }
+
+                await device.SetPauseInternetAsync(request.Paused!.Value);
+                return new DeviceAutomationResponse(
+                    true,
+                    null,
+                    device.DisplayName,
+                    device.PauseInternet);
+            },
+            DispatcherPriority.Normal);
+
+        return operation.Task.Unwrap();
     }
 
     private void CopyAutomationScriptButton_OnClick(
@@ -1789,9 +1824,10 @@ public partial class MainWindow : Window
                 });
         }
         catch (Exception exception) when (
-            exception is IOException or InvalidOperationException)
+            exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             await Dispatcher.InvokeAsync(() => DetailStatusText.Text = exception.Message);
+            throw;
         }
     }
 
@@ -2014,6 +2050,7 @@ public partial class MainWindow : Window
         autoScanTimer.Stop();
         scriptAutomationTimer.Stop();
         scriptRunCancellation.Cancel();
+        await deviceAutomationPipeServer.DisposeAsync();
         if (closeAfterStop ||
             (!engine.IsRunning && activeScriptRunTask is null))
         {
