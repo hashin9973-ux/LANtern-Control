@@ -13,6 +13,7 @@ namespace Lantern.App.Services;
 public sealed class PcapLanEngine : IAsyncDisposable
 {
     private readonly object injectionSendSync = new();
+    private readonly object temporaryProbeSendSync = new();
     private static readonly TimeSpan InjectionHandleRecoveryCooldown = TimeSpan.FromSeconds(10);
     private const long CaptureQueueMaximumBytes = 32 * 1024 * 1024;
     private const long ForwardingQueueMaximumBytes = 32 * 1024 * 1024;
@@ -415,7 +416,6 @@ public sealed class PcapLanEngine : IAsyncDisposable
                     arpDevice?.Opened != true ||
                     forwardingDevice?.Opened != true ||
                     injectionDevice?.Opened != true ||
-                    injectionDevice?.Opened != true ||
                     backgroundTask?.IsCompleted == true)
                 {
                     throw new InvalidOperationException(
@@ -770,7 +770,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             return await SendBatchesAsync(
                 (address, bytes) =>
                 {
-                    lock (arpSendSync)
+                    lock (temporaryProbeSendSync)
                     {
                         captureDevice.SendPacket(bytes);
                     }
