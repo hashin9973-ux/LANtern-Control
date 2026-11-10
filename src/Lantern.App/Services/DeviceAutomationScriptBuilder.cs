@@ -42,7 +42,8 @@ public static class DeviceAutomationScriptBuilder
                 $pipe = [System.IO.Pipes.NamedPipeClientStream]::new(
                     '.',
                     $script:LanternPipeName,
-                    [System.IO.Pipes.PipeDirection]::InOut
+                    [System.IO.Pipes.PipeDirection]::InOut,
+                    [System.IO.Pipes.PipeOptions]::CurrentUserOnly
                 )
                 $encoding = [System.Text.UTF8Encoding]::new($false)
                 $writer = $null
