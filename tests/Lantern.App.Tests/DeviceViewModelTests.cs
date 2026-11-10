@@ -70,6 +70,17 @@ public sealed class DeviceViewModelTests
                 callbackCount++;
                 return applyRule.Task;
             });
+        var registry = new DeviceRegistry();
+        registry.Observe(
+            IPAddress.Parse("192.168.31.42"),
+            PhysicalAddress.Parse("AABBCCDDEEFF"),
+            DateTimeOffset.UtcNow,
+            "test-device");
+        viewModel.Initialize(
+            Assert.Single(registry.Peek()),
+            null,
+            isProtectedDevice: false,
+            "Online");
 
         var update = viewModel.SetPauseInternetAsync(paused: true);
 
