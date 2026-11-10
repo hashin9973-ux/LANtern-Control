@@ -7,7 +7,7 @@ namespace Lantern.App.ViewModels;
 
 public sealed class DeviceViewModel : INotifyPropertyChanged
 {
-    private readonly Func<DeviceViewModel, Task> changed;
+    private readonly Func<DeviceViewModel, bool, Task> changed;
     private string ipAddress = string.Empty;
     private string macAddress = string.Empty;
     private string displayName = "Unknown device";
@@ -27,7 +27,13 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
     private string protectedReason = string.Empty;
 
     public DeviceViewModel(Func<DeviceViewModel, Task> changed)
+        : this((device, _) => changed(device))
     {
+    }
+
+    public DeviceViewModel(Func<DeviceViewModel, bool, Task> changed)
+    {
+        ArgumentNullException.ThrowIfNull(changed);
         this.changed = changed;
     }
 
@@ -192,7 +198,7 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
 
         // Reapply even when the value already matches. A previous attempt may
         // have failed before the rule reached the packet engine.
-        return changed(this);
+        return changed(this, forceApply: true);
     }
 
     public bool IsProtected
@@ -318,7 +324,7 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
     {
         try
         {
-            await changed(this);
+            await changed(this, forceApply: false);
         }
         catch
         {
