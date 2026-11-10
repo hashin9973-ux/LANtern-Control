@@ -8,7 +8,7 @@ public static class ArpEnforcementHealthPolicy
 {
     public static bool IsStale(
         bool hasInterceptionTargets,
-        long lastSuccessfulInjectionUtcTicks,
+        long lastSuccessfulEnforcementUtcTicks,
         long nowUtcTicks,
         TimeSpan maximumSilence)
     {
@@ -24,12 +24,12 @@ public static class ArpEnforcementHealthPolicy
             return false;
         }
 
-        if (lastSuccessfulInjectionUtcTicks <= 0 ||
-            nowUtcTicks < lastSuccessfulInjectionUtcTicks)
+        if (lastSuccessfulEnforcementUtcTicks <= 0 ||
+            nowUtcTicks < lastSuccessfulEnforcementUtcTicks)
         {
             return true;
         }
 
-        return nowUtcTicks - lastSuccessfulInjectionUtcTicks > maximumSilence.Ticks;
+        return nowUtcTicks - lastSuccessfulEnforcementUtcTicks > maximumSilence.Ticks;
     }
 }
