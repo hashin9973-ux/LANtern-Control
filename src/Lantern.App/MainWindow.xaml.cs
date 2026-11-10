@@ -1774,7 +1774,7 @@ public partial class MainWindow : Window
         DeviceCountText.Text = $"{Devices.Count} device{(Devices.Count == 1 ? string.Empty : "s")}";
     }
 
-    private async Task OnDeviceRuleChangedAsync(DeviceViewModel device)
+    private async Task OnDeviceRuleChangedAsync(DeviceViewModel device, bool forceApply)
     {
         if (!device.CanControl)
         {
@@ -1799,7 +1799,7 @@ public partial class MainWindow : Window
             StringComparison.Ordinal);
         try
         {
-            if (ruleChanged)
+            if (ruleChanged || forceApply)
             {
                 await engine.ApplyRuleAsync(device.MacKey, rule);
             }
