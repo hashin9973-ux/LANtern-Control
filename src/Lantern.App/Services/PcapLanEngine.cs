@@ -116,6 +116,8 @@ public sealed class PcapLanEngine : IAsyncDisposable
         arpDevice?.Opened == true &&
         forwardingDevice?.Opened == true &&
         injectionDevice?.Opened == true &&
+        controlling &&
+        !restoring &&
         backgroundFailure is null &&
         healthFaults.IsHealthy &&
         Volatile.Read(ref captureStatisticsWarning) is null &&
@@ -138,6 +140,10 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 GetTransientDegradedReason() ??
                 Volatile.Read(ref captureStatisticsWarning) ??
                 GetLiveHealthWarning() ??
+                (!controlling || restoring ? "The controller is not actively enforcing policy." : null) ??
+                (arpDevice?.Opened != true ? "The ARP capture handle is closed." : null) ??
+                (forwardingDevice?.Opened != true ? "The IPv4 capture handle is closed." : null) ??
+                (injectionDevice?.Opened != true ? "The dedicated injection handle is closed." : null) ??
                 (runtime?.NativeLibraryPath is null ? runtime?.Error : null),
             runtime?.CaptureLibraryVersion ?? "Not loaded",
             runtime?.SharpPcapVersion ?? "Unknown",
