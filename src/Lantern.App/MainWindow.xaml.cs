@@ -2087,7 +2087,7 @@ public partial class MainWindow : Window
         {
             closeAfterStop = true;
             // Close only after this Closing event has returned to the dispatcher.
-            Dispatcher.BeginInvoke(new Action(Close), DispatcherPriority.Background);
+            _ = Dispatcher.BeginInvoke(new Action(Close), DispatcherPriority.Background);
         }
     }
 
