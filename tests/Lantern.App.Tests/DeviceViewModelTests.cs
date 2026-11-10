@@ -64,10 +64,12 @@ public sealed class DeviceViewModelTests
         var applyRule = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var callbackCount = 0;
+        var forceApplyReceived = false;
         var viewModel = new DeviceViewModel(
-            _ =>
+            (_, forceApply) =>
             {
                 callbackCount++;
+                forceApplyReceived = forceApply;
                 return applyRule.Task;
             });
         var registry = new DeviceRegistry();
@@ -87,6 +89,7 @@ public sealed class DeviceViewModelTests
         Assert.True(viewModel.PauseInternet);
         Assert.True(viewModel.HasActiveRule);
         Assert.Equal(1, callbackCount);
+        Assert.True(forceApplyReceived);
         Assert.False(update.IsCompleted);
 
         applyRule.SetResult(true);
