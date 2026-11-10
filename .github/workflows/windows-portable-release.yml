@@ -29,7 +29,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: windows-portable-v0.1.14
+  group: windows-portable-v0.1.19
   cancel-in-progress: false
 
 jobs:
@@ -73,7 +73,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Path .\outputs -Force | Out-Null
-          $archive = ".\outputs\LANtern-Control-v0.1.14-win-x64.zip"
+          $archive = ".\outputs\LANtern-Control-v0.1.19-win-x64.zip"
           if (Test-Path $archive) { Remove-Item $archive -Force }
           Compress-Archive -Path .\release\* -DestinationPath $archive -CompressionLevel Optimal
           if (-not (Test-Path $archive)) { throw "Portable ZIP was not created." }
@@ -86,8 +86,8 @@ jobs:
           $ErrorActionPreference = "Stop"
           dotnet build .\installer\LanternControl.wixproj -c Release -p:InstallerPlatform=x64 -p:PublishDir="$((Resolve-Path .\release).Path)\"
           if ($LASTEXITCODE -ne 0) { throw "Windows MSI compilation failed." }
-          $builtInstaller = ".\packaging\wix\LANtern-Control-Setup-v0.1.14.msi"
-          $installer = ".\outputs\LANtern-Control-Setup-v0.1.14.msi"
+          $builtInstaller = ".\packaging\wix\LANtern-Control-Setup-v0.1.19.msi"
+          $installer = ".\outputs\LANtern-Control-Setup-v0.1.19.msi"
           if (-not (Test-Path $builtInstaller)) { throw "Compiled MSI is missing: $builtInstaller" }
           Copy-Item -LiteralPath $builtInstaller -Destination $installer -Force
           Get-Item $installer | Format-List FullName, Length
@@ -97,10 +97,10 @@ jobs:
       - name: Upload Windows portable and MSI artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: LANtern-Control-v0.1.14-Windows-x64
+          name: LANtern-Control-v0.1.19-Windows-x64
           path: |
-            .\outputs\LANtern-Control-v0.1.14-win-x64.zip
-            .\outputs\LANtern-Control-Setup-v0.1.14.msi
+            .\outputs\LANtern-Control-v0.1.19-win-x64.zip
+            .\outputs\LANtern-Control-Setup-v0.1.19.msi
           if-no-files-found: error
           retention-days: 30
 
@@ -108,16 +108,16 @@ jobs:
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3
         with:
-          tag_name: v0.1.14
+          tag_name: v0.1.19
           target_commitish: master
-          name: LANtern Control v0.1.14
+          name: LANtern Control v0.1.19
           body: |
             Windows x64 portable ZIP and MSI installer.
 
-            Serializes controller lifecycle transitions and awaits packet workers before closing capture handles. Separates capture from packet processing, bounds packet queues, prioritizes ARP/control injection, and reports Npcap capture drops, loaded capture-library details, throughput, queue pressure, injection errors, and latency. Background failures trigger an observable safe shutdown instead of a misleading Running state. Automatic inventory refresh remains passive; full discovery is user-initiated.
+            Revalidates previously discovered client addresses with targeted ARP probes during controller startup (without scanning the full subnet), installs only verified live IP/MAC mappings into the forwarding engine, and immediately applies saved pause/rate/domain rules to responding clients. A rule change without a verified live mapping now reports an enforcement error instead of silently appearing successful. First-time subnet discovery remains user-initiated. Also includes bounded packet queues, serialized Npcap injection, health diagnostics, and supervised safe shutdown.
           generate_release_notes: true
           files: |
-            .\outputs\LANtern-Control-v0.1.14-win-x64.zip
-            .\outputs\LANtern-Control-Setup-v0.1.14.msi
+            .\outputs\LANtern-Control-v0.1.19-win-x64.zip
+            .\outputs\LANtern-Control-Setup-v0.1.19.msi
           fail_on_unmatched_files: true
           make_latest: true

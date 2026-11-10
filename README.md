@@ -146,9 +146,9 @@ disconnecting the selected adapter, suspending, or rebooting.
    then discover responsive hosts on the selected local IPv4 segment using ARP,
    UPnP/SSDP, DNS-SD/mDNS service discovery, ICMP, common TCP services, NetBIOS
    and reverse mDNS. Live IPs without a verified MAC remain visible as
-   inventory-only entries. Select **Auto scan** and set an interval from
-   60 to 3600 seconds to refresh the device list periodically while the app is open.
-4. Click **Start control** to enable the selected device rules and live capture.
+   inventory-only entries. On Windows, select **Auto scan** and set an interval from
+   1 to 3600 seconds to repeat the full discovery process while the app is open.
+4. Click **Start control** to revalidate previously discovered devices and enable their saved rules with live capture. This startup check targets remembered addresses only; it does not scan the subnet. On Windows, newly discovered devices can also be found by **Auto scan** when enabled.
 5. Enter a download or upload limit in `KB/s`. A value of `0` means unlimited.
 6. Use the **Internet** switch to pause or restore a device's connection.
 7. Open **Script automation** from the left sidebar. Use **Open…** to load a `.ps1` file, **Run now** to test it, or explicitly enable a 60–3600 second schedule. The schedule stops when LANtern closes and skips overlapping runs.
@@ -198,10 +198,11 @@ queries each have a response window of up to 1.4 seconds. Multicast and direct
 probe starts share a global spacing of at least 5 ms (no more than 200 starts
 per second); no more than 64 individual hosts are checked concurrently, and
 no more than five direct fallback probes are sent to any remaining
-unconfirmed address. The supplemental pass has a separate one-minute cooldown
-per adapter. **Auto scan** is optional and disabled by default; when enabled,
-it repeats the full discovery process at the configured interval (60–3600
-seconds) while LANtern remains open. Background presence checks remain a
+unconfirmed address. On Windows, full discovery has no additional per-adapter one-minute cooldown.
+**Auto scan** is optional and disabled by default; when enabled, it repeats
+the same full discovery process at the configured interval (1–3600 seconds)
+while LANtern remains open. The Linux beta retains its separate platform-specific
+discovery cadence. Background presence checks remain a
 separate low-rate task limited to remembered device addresses. Periodic
 full scans do not change interception rules or expand the poisoning loop.
 
@@ -244,8 +245,7 @@ isolation, VLAN boundaries, a different broadcast network, driver limitations,
 or a device that is silent on all checked protocols can still prevent
 detection. Powered-off or completely silent devices require router/AP client
 inventory or DHCP lease history to be listed as unavailable. A device that
-moves to another address after the scan may not appear until another manual
-scan or a new DHCP/ARP observation occurs.
+moves to another address after the scan may not appear until the next scheduled or manual discovery scan or a new DHCP/ARP observation occurs.
 
 To avoid affecting every discovered device, packet interception is now scoped
 to devices with an explicit pause, non-zero rate limit, or domain-blocking rule.

@@ -14,7 +14,6 @@ public sealed class PcapLanEngine : IAsyncDisposable
 {
     private readonly object injectionSendSync = new();
     private readonly object temporaryProbeSendSync = new();
-    private static readonly TimeSpan InjectionHandleRecoveryCooldown = TimeSpan.FromSeconds(10);
     private const long CaptureQueueMaximumBytes = 32 * 1024 * 1024;
     private const long ForwardingQueueMaximumBytes = 32 * 1024 * 1024;
     private const long PriorityQueueMaximumBytes = 1024 * 1024;
@@ -33,7 +32,6 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private readonly ArpIdentityMonitor identityMonitor = new();
     private readonly ConcurrentDictionary<IPAddress, DateTimeOffset> lastPresenceProbeAt = new();
     private DateTimeOffset lastPresenceProbeBatchAt = DateTimeOffset.MinValue;
-    private DateTimeOffset lastDiscoveryProbeBatchAt = DateTimeOffset.MinValue;
     private string? presenceProbeAdapterId;
     private readonly ResolvedDeviceNameClaims resolvedNameClaims = new(Dns.GetHostName());
     private readonly ConcurrentDictionary<string, byte> resolvingNames =
@@ -50,7 +48,6 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private uint previousCaptureReceived;
     private uint previousCaptureDropped;
     private bool captureStatisticsInitialized;
-    private long lastInjectionHandleRecoveryAttemptUtcTicks;
     private long lastInjectionHandleRecoveryUtcTicks;
     private long injectionHandleReopenCount;
     private int injectionRetryAttempts;
@@ -242,6 +239,12 @@ public sealed class PcapLanEngine : IAsyncDisposable
             await NpfDriverService.EnsureAvailableAsync(cancellationToken);
             profile = adapter;
             clientMappings.BeginAdapter(adapter.Id);
+            // Presence-probe scheduling is per controller session. Reset it so
+            // known clients are actively revalidated before any saved rule is
+            // reported as running on this adapter.
+            lastPresenceProbeAt.Clear();
+            lastPresenceProbeBatchAt = DateTimeOffset.MinValue;
+            presenceProbeAdapterId = adapter.Id;
             resolvedNameClaims.Reset(rejectedResolvedNames);
             resolvingNames.Clear();
             registry.BeginSession();
@@ -254,7 +257,6 @@ public sealed class PcapLanEngine : IAsyncDisposable
             backgroundFailure = null;
             healthFaults.Clear();
             healthState.BeginStart();
-            Interlocked.Exchange(ref lastInjectionHandleRecoveryAttemptUtcTicks, 0);
             Interlocked.Exchange(ref lastInjectionHandleRecoveryUtcTicks, 0);
             Interlocked.Exchange(ref injectionHandleReopenCount, 0);
             Interlocked.Exchange(ref forwardedPacketCount, 0);
@@ -424,6 +426,23 @@ public sealed class PcapLanEngine : IAsyncDisposable
                     cancellationToken);
 
                 await RefreshNeighborsAsync(cancellationToken);
+
+                // Revalidate only addresses already present in remembered
+                // inventory / the Windows neighbor cache. This is deliberately
+                // not a subnet scan: unknown addresses remain user-initiated.
+                RaiseStatus("Verifying previously discovered devices for traffic control…");
+                var startupPresence = await ProbeAddressesAsync(
+                    adapter,
+                    force: true,
+                    cancellationToken);
+                diagnosticLog.Write(
+                    "controller.startup-presence-probe-completed",
+                    "device presence",
+                    profile?.Name,
+                    "running",
+                    $"Sent {startupPresence.RequestsSent} known-client ARP probe(s); " +
+                    $"{startupPresence.DevicesResponded} verified client(s) replied.");
+
                 if (backgroundFailure is not null ||
                     !IsRunning ||
                     arpDevice?.Opened != true ||
@@ -437,9 +456,14 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
                 PoisonClients();
                 healthState.CompleteStart(AreHealthPrerequisitesSatisfied());
+                var presenceMessage = startupPresence.RequestsSent == 0
+                    ? "No previously discovered client addresses were available to verify. Run Scan devices before applying a device rule."
+                    : startupPresence.DevicesResponded == 0
+                        ? "No previously discovered clients replied to the startup ARP checks. Rules cannot be enforced until a client is reachable and verified."
+                        : $"Verified {startupPresence.DevicesResponded} previously discovered client(s) for control.";
                 var activeMessage = IsHealthy
-                    ? "Control is running — packet capture, queue pressure, Npcap drops, and injection health are being monitored."
-                    : $"Control is running in DEGRADED mode: {GetHealthSnapshot().Failure ?? "packet health could not be fully verified."}";
+                    ? $"Control is running — packet capture, queue pressure, Npcap drops, and injection health are being monitored. {presenceMessage}"
+                    : $"Control is running in DEGRADED mode: {GetHealthSnapshot().Failure ?? "packet health could not be fully verified."} {presenceMessage}";
                 diagnosticLog.Write(
                     "controller.running",
                     "lifecycle",
@@ -627,20 +651,16 @@ public sealed class PcapLanEngine : IAsyncDisposable
         {
             lastPresenceProbeAt.Clear();
             lastPresenceProbeBatchAt = DateTimeOffset.MinValue;
-            lastDiscoveryProbeBatchAt = DateTimeOffset.MinValue;
             presenceProbeAdapterId = activeProfile.Id;
         }
 
         var now = DateTimeOffset.UtcNow;
-        var previousBatchAt = discoverSubnet
-            ? lastDiscoveryProbeBatchAt
-            : lastPresenceProbeBatchAt;
-        var minimumInterval = discoverSubnet
-            ? DeviceProbePolicy.DiscoveryInterval
-            : DeviceProbePolicy.ProbeInterval;
-        if (previousBatchAt != DateTimeOffset.MinValue &&
-            now >= previousBatchAt &&
-            now - previousBatchAt < minimumInterval)
+        // Full subnet discovery is scheduled by the UI's auto-scan interval.
+        // Keep the separate cooldown for background presence checks.
+        if (!discoverSubnet &&
+            lastPresenceProbeBatchAt != DateTimeOffset.MinValue &&
+            now >= lastPresenceProbeBatchAt &&
+            now - lastPresenceProbeBatchAt < DeviceProbePolicy.ProbeInterval)
         {
             return DiscoveryProbeResult.Empty;
         }
@@ -675,21 +695,9 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
         void MarkBatchStarted()
         {
-            if (discoverSubnet)
-            {
-                lastDiscoveryProbeBatchAt = DateTimeOffset.UtcNow;
-            }
-            else
+            if (!discoverSubnet)
             {
                 lastPresenceProbeBatchAt = DateTimeOffset.UtcNow;
-            }
-        }
-
-        void MarkBatchCompleted()
-        {
-            if (discoverSubnet)
-            {
-                lastDiscoveryProbeBatchAt = DateTimeOffset.UtcNow;
             }
         }
 
@@ -729,7 +737,6 @@ public sealed class PcapLanEngine : IAsyncDisposable
                     });
             }
 
-            MarkBatchCompleted();
             return new DiscoveryProbeResult(
                 firstPassSent + retrySent,
                 retrySent,
@@ -739,11 +746,10 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
         if (arpDevice is not null)
         {
-            if (discoverSubnet)
-            {
-                BeginTemporaryProbeContext(activeProfile, targets, responders, createIdentityMonitor: false);
-            }
-
+            // Track replies from the active capture callback for both targeted
+            // presence checks and explicit discovery. The same verified ARP
+            // observation also populates clientMappings for packet forwarding.
+            BeginTemporaryProbeContext(activeProfile, targets, responders, createIdentityMonitor: false);
             try
             {
                 return await SendBatchesAsync(
@@ -755,10 +761,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             }
             finally
             {
-                if (discoverSubnet)
-                {
-                    EndTemporaryProbeContext();
-                }
+                EndTemporaryProbeContext();
             }
         }
 
@@ -785,7 +788,9 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 {
                     lock (temporaryProbeSendSync)
                     {
-                        captureDevice.SendPacket(bytes);
+                        NpcapSendQueueTransmitter.Send(
+                            captureDevice,
+                            EthernetFrameCodec.PadToMinimumEthernetFrameSize(bytes));
                     }
 
                     lastPresenceProbeAt[address] = DateTimeOffset.UtcNow;
@@ -1085,6 +1090,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
         if (controlling)
         {
             var normalizedMac = TrafficPolicy.NormalizeMac(macAddress);
+            KeyValuePair<IPAddress, PhysicalAddress>? matchedClient = null;
             foreach (var client in clients)
             {
                 if (string.Equals(
@@ -1092,12 +1098,22 @@ public sealed class PcapLanEngine : IAsyncDisposable
                         normalizedMac,
                         StringComparison.Ordinal))
                 {
-                    await ApplyInterceptionTransitionAsync(
-                        client,
-                        InterceptionTransition.Between(previousTargets, currentTargets));
+                    matchedClient = client;
                     break;
                 }
             }
+
+            if (matchedClient is null)
+            {
+                throw new InvalidOperationException(
+                    $"The rule for {normalizedMac} could not be enforced yet: " +
+                    "there is no verified live IP/MAC mapping for this device. " +
+                    "Run Scan devices while Control is running, then apply the rule again.");
+            }
+
+            await ApplyInterceptionTransitionAsync(
+                matchedClient.Value,
+                InterceptionTransition.Between(previousTargets, currentTargets));
         }
     }
 
@@ -2012,116 +2028,39 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
     private void SendInjectionPacket(byte[] bytes, string packetKind)
     {
+        // ARP builders produce 42-byte Ethernet frames. Normalize every
+        // egress packet before queuing it for Npcap.
+        var transmissionFrame = EthernetFrameCodec.PadToMinimumEthernetFrameSize(bytes);
+
         lock (injectionSendSync)
         {
             var activeDevice = PacketInjectionPolicy.SelectInjectionHandle(injectionDevice);
             try
             {
-                activeDevice.SendPacket(bytes);
+                // Use pcap_sendqueue_transmit (PacketSendPackets on Windows),
+                // not pcap_sendpacket (PacketSendPacket). These are distinct
+                // Npcap send entry points, avoiding the single-packet path
+                // that previously returned ERROR_GEN_FAILURE.
+                NpcapSendQueueTransmitter.Send(activeDevice, transmissionFrame);
             }
             catch (Exception exception)
             {
                 Interlocked.Increment(ref injectionSendFailures);
                 var adapterName = profile?.Name ?? "unknown adapter";
-                string recoveryMessage;
-                try
-                {
-                    recoveryMessage = TryReopenInjectionHandle(exception)
-                        ? "The dedicated injection handle was reopened; the bounded retry will retry this packet."
-                        : "The injection-handle recovery cooldown is active.";
-                }
-                catch (Exception recoveryException)
-                {
-                    diagnosticLog.Write(
-                        "packet-injection.handle-reopen-failed",
-                        "Npcap injection handle",
-                        adapterName,
-                        "degraded",
-                        "The failed injection handle could not be reopened.",
-                        new AggregateException(exception, recoveryException));
-                    throw new InvalidOperationException(
-                        $"Npcap rejected a {packetKind} on '{adapterName}' ({bytes.Length} bytes), " +
-                        $"and reopening the dedicated injection handle failed: {recoveryException.Message}",
-                        new AggregateException(exception, recoveryException));
-                }
-
+                diagnosticLog.Write(
+                    "packet-injection.native-send-queue-failed",
+                    "Npcap native send queue",
+                    adapterName,
+                    "degraded",
+                    $"Npcap could not submit a {packetKind} through the native send-queue path " +
+                    $"({transmissionFrame.Length}-byte frame; {bytes.Length}-byte input).",
+                    exception);
                 throw new InvalidOperationException(
-                    $"Npcap rejected a {packetKind} on '{adapterName}' ({bytes.Length} bytes): " +
-                    $"{exception.Message} {recoveryMessage}",
+                    $"Npcap native send queue failed for {packetKind} on '{adapterName}' " +
+                    $"({transmissionFrame.Length}-byte frame; {bytes.Length}-byte input): {exception.Message}",
                     exception);
             }
         }
-    }
-
-    /// <summary>
-    /// Recreates only the send handle after a native injection failure. Capture
-    /// handles and their readers remain untouched. The cooldown bounds recovery
-    /// attempts; if a fresh handle cannot send, normal supervised shutdown applies.
-    /// </summary>
-    private bool TryReopenInjectionHandle(Exception sendFailure)
-    {
-        var nowUtcTicks = DateTimeOffset.UtcNow.UtcTicks;
-        var previousAttempt = Interlocked.Read(ref lastInjectionHandleRecoveryAttemptUtcTicks);
-        if (previousAttempt > 0 &&
-            nowUtcTicks >= previousAttempt &&
-            nowUtcTicks - previousAttempt < InjectionHandleRecoveryCooldown.Ticks)
-        {
-            return false;
-        }
-
-        Interlocked.Exchange(ref lastInjectionHandleRecoveryAttemptUtcTicks, nowUtcTicks);
-        var activeInterface = arpDevice?.Interface ??
-            throw new InvalidOperationException("The active adapter interface is no longer available.");
-
-        var failedHandle = injectionDevice ??
-            throw new InvalidOperationException("The dedicated injection handle is unavailable.");
-        diagnosticLog.Write(
-            "packet-injection.handle-reopen-starting",
-            "Npcap injection handle",
-            profile?.Name,
-            "recovering",
-            "A packet send failed; reopening only the injection handle.",
-            sendFailure);
-
-        // No other sender can hold this handle: all writes and this recovery
-        // execute under injectionSendSync, and shutdown awaits the worker.
-        failedHandle.Close();
-
-        var replacement = new LibPcapLiveDevice(activeInterface);
-        try
-        {
-            replacement.Open(PcapCaptureConfiguration.CreateForInjection());
-        }
-        catch
-        {
-            try
-            {
-                replacement.Close();
-            }
-            catch (Exception cleanupException)
-            {
-                diagnosticLog.Write(
-                    "packet-injection.replacement-cleanup-failed",
-                    "Npcap injection handle",
-                    profile?.Name,
-                    "degraded",
-                    "The replacement handle failed to open and also failed cleanup.",
-                    cleanupException);
-            }
-
-            throw;
-        }
-
-        injectionDevice = replacement;
-        Interlocked.Increment(ref injectionHandleReopenCount);
-        Interlocked.Exchange(ref lastInjectionHandleRecoveryUtcTicks, nowUtcTicks);
-        diagnosticLog.Write(
-            "packet-injection.handle-reopened",
-            "Npcap injection handle",
-            profile?.Name,
-            "recovering",
-            "A fresh dedicated injection handle opened; the original packet is being retried.");
-        return true;
     }
 
     private void RecordArpInjectionSuccess()

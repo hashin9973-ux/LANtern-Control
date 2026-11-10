@@ -52,6 +52,44 @@ public sealed class NetworkingTests
     }
 
     [Fact]
+    public void PadToMinimumEthernetFrameSize_Pads42ByteArpFrameTo60Bytes()
+    {
+        var frame = EthernetFrameCodec.BuildArpRequest(
+            PhysicalAddress.Parse("345A6063C052"),
+            IPAddress.Parse("192.168.31.247"),
+            IPAddress.Parse("192.168.31.1"));
+
+        Assert.Equal(42, frame.Length);
+
+        var padded = EthernetFrameCodec.PadToMinimumEthernetFrameSize(frame);
+
+        Assert.Equal(60, padded.Length);
+        Assert.Equal(frame, padded[..frame.Length]);
+        Assert.All(padded[frame.Length..], value => Assert.Equal((byte)0, value));
+        Assert.True(EthernetFrameCodec.TryParseArp(padded, out var arp));
+        Assert.Equal(ArpOperation.Request, arp.Operation);
+    }
+
+    [Fact]
+    public void PadToMinimumEthernetFrameSize_DoesNotCopyAlreadySizedFrames()
+    {
+        var frame = Enumerable.Range(0, 64).Select(value => (byte)value).ToArray();
+
+        var padded = EthernetFrameCodec.PadToMinimumEthernetFrameSize(frame);
+
+        Assert.Same(frame, padded);
+    }
+
+    [Fact]
+    public void PadToMinimumEthernetFrameSize_RejectsTruncatedEthernetHeader()
+    {
+        var exception = Assert.Throws<ArgumentException>(
+            () => EthernetFrameCodec.PadToMinimumEthernetFrameSize(new byte[13]));
+
+        Assert.Contains("14-byte header", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void BuildUnicastArpRequest_AddressesOnlyTheKnownDevice()
     {
         var bytes = EthernetFrameCodec.BuildUnicastArpRequest(

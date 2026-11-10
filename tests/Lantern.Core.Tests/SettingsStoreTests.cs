@@ -271,8 +271,15 @@ public sealed class SettingsStoreTests
         }
     }
 
-    [Fact]
-    public async Task SaveAndLoad_PersistsAutomaticScanPreferences()
+    [Theory]
+    [InlineData(1)]
+    [InlineData(5)]
+    [InlineData(30)]
+    [InlineData(59)]
+    [InlineData(60)]
+    [InlineData(120)]
+    [InlineData(3600)]
+    public async Task SaveAndLoad_PreservesAutomaticScanIntervals(int intervalSeconds)
     {
         var directory = CreateTemporaryDirectory();
         try
@@ -281,14 +288,14 @@ public sealed class SettingsStoreTests
             var settings = new AppSettings
             {
                 AutoScanEnabled = true,
-                AutoScanIntervalSeconds = 120,
+                AutoScanIntervalSeconds = intervalSeconds,
             };
 
             await store.SaveAsync(settings);
             var loaded = await store.LoadAsync();
 
             Assert.True(loaded.AutoScanEnabled);
-            Assert.Equal(120, loaded.AutoScanIntervalSeconds);
+            Assert.Equal(intervalSeconds, loaded.AutoScanIntervalSeconds);
         }
         finally
         {
