@@ -2048,12 +2048,17 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
     private void SendInjectionPacket(byte[] bytes, string packetKind)
     {
+        // ARP Ethernet frames are 42 bytes before link-layer padding. The
+        // minimum Ethernet frame is 60 bytes without its hardware-generated
+        // FCS; pad here so every Npcap egress path gets a valid-sized frame.
+        var transmissionFrame = EthernetFrameCodec.PadToMinimumEthernetFrameSize(bytes);
+
         lock (injectionSendSync)
         {
             var activeDevice = PacketInjectionPolicy.SelectInjectionHandle(injectionDevice);
             try
             {
-                activeDevice.SendPacket(bytes);
+                activeDevice.SendPacket(transmissionFrame);
             }
             catch (Exception exception)
             {
@@ -2076,13 +2081,15 @@ public sealed class PcapLanEngine : IAsyncDisposable
                         "The failed injection handle could not be reopened.",
                         new AggregateException(exception, recoveryException));
                     throw new InvalidOperationException(
-                        $"Npcap rejected a {packetKind} on '{adapterName}' ({bytes.Length} bytes), " +
+                        $"Npcap rejected a {packetKind} on '{adapterName}' " +
+                        $"({transmissionFrame.Length}-byte frame; {bytes.Length}-byte input), " +
                         $"and reopening the dedicated injection handle failed: {recoveryException.Message}",
                         new AggregateException(exception, recoveryException));
                 }
 
                 throw new InvalidOperationException(
-                    $"Npcap rejected a {packetKind} on '{adapterName}' ({bytes.Length} bytes): " +
+                    $"Npcap rejected a {packetKind} on '{adapterName}' " +
+                    $"({transmissionFrame.Length}-byte frame; {bytes.Length}-byte input): " +
                     $"{exception.Message} {recoveryMessage}",
                     exception);
             }

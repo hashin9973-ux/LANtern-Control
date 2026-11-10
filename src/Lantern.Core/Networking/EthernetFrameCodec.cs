@@ -30,6 +30,10 @@ public readonly record struct Ipv4FrameInfo(
 
 public static class EthernetFrameCodec
 {
+    // Ethernet's 64-byte minimum includes the 4-byte FCS, which is supplied
+    // by the interface and is not present in pcap packet buffers.
+    public const int MinimumEthernetFrameLengthWithoutFcs = 60;
+
     private const ushort EtherTypeIpv4 = 0x0800;
     private const ushort EtherTypeArp = 0x0806;
     private const ushort EtherTypeVlan = 0x8100;
@@ -206,6 +210,31 @@ public static class EthernetFrameCodec
         return tcpHeaderLength is >= 20 && tcpHeaderLength <= ipv4PayloadLength
             ? ipv4PayloadLength - tcpHeaderLength
             : ipv4PayloadLength;
+    }
+
+    /// <summary>
+    /// Pads an outgoing Ethernet buffer to the 60-byte minimum length
+    /// excluding the hardware-generated 4-byte FCS. Frames already at least
+    /// this long are returned unchanged to avoid allocations on the hot path.
+    /// </summary>
+    public static byte[] PadToMinimumEthernetFrameSize(byte[] frame)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        if (frame.Length < 14)
+        {
+            throw new ArgumentException(
+                "An Ethernet frame must contain at least a 14-byte header.",
+                nameof(frame));
+        }
+
+        if (frame.Length >= MinimumEthernetFrameLengthWithoutFcs)
+        {
+            return frame;
+        }
+
+        var padded = new byte[MinimumEthernetFrameLengthWithoutFcs];
+        frame.CopyTo(padded, 0);
+        return padded;
     }
 
     public static byte[] RewriteEthernetAddresses(
