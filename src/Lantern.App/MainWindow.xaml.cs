@@ -1935,10 +1935,12 @@ public partial class MainWindow : Window
             $"forward queue wait {snapshot.LastForwardingQueueLatencyMilliseconds:N1} ms · " +
             $"{queueBytes} · capture {captureAge} · ARP send {arpAge}";
 
-        if (!string.IsNullOrWhiteSpace(snapshot.NativeLibraryError) ||
+        if (!string.IsNullOrWhiteSpace(snapshot.Failure) ||
+            !string.IsNullOrWhiteSpace(snapshot.NativeLibraryError) ||
             !string.IsNullOrWhiteSpace(snapshot.CaptureStatisticsWarning))
         {
-            var diagnostic = snapshot.CaptureStatisticsWarning ??
+            var diagnostic = snapshot.Failure ??
+                             snapshot.CaptureStatisticsWarning ??
                              snapshot.NativeLibraryError;
             PacketHealthText.ToolTip = diagnostic;
         }
