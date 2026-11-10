@@ -61,7 +61,7 @@ public sealed class DeviceViewModelTests
     [Fact]
     public async Task SetPauseInternetAsync_AwaitsTheRuleApplication()
     {
-        var applyRule = new TaskCompletionSource(
+        var applyRule = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var callbackCount = 0;
         var viewModel = new DeviceViewModel(
@@ -78,7 +78,7 @@ public sealed class DeviceViewModelTests
         Assert.Equal(1, callbackCount);
         Assert.False(update.IsCompleted);
 
-        applyRule.SetResult();
+        applyRule.SetResult(true);
         await update;
     }
 
