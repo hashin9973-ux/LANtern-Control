@@ -16,6 +16,19 @@ public sealed class PcapCaptureConfigurationTests
     }
 
     [Fact]
+    public void CreateForInjection_UsesAnIndependentNonCaptureConfiguration()
+    {
+        var configuration = PcapCaptureConfiguration.CreateForInjection();
+
+        Assert.Equal(DeviceModes.None, configuration.Mode);
+        Assert.False(configuration.Immediate);
+        Assert.Equal(100, configuration.ReadTimeout);
+        Assert.Equal(65_536, configuration.Snaplen);
+        Assert.Null(configuration.BufferSize);
+        Assert.Null(configuration.KernelBufferSize);
+    }
+
+    [Fact]
     public void CreateForForwarding_UsesBufferedPacketDelivery()
     {
         var configuration = PcapCaptureConfiguration.CreateForForwarding();
