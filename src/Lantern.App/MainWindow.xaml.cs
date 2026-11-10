@@ -2049,17 +2049,18 @@ public partial class MainWindow : Window
         autoScanTimer.Stop();
         scriptAutomationTimer.Stop();
         scriptRunCancellation.Cancel();
-        await deviceAutomationPipeServer.DisposeAsync();
-        if (closeAfterStop ||
-            (!engine.IsRunning && activeScriptRunTask is null))
+        if (closeAfterStop)
         {
             return;
         }
 
+        // Cancel synchronously before awaiting pipe/script/engine shutdown so WPF
+        // cannot close the window while an asynchronous cleanup is still running.
         eventArgs.Cancel = true;
         IsEnabled = false;
         try
         {
+            await deviceAutomationPipeServer.DisposeAsync();
             if (activeScriptRunTask is not null)
             {
                 await activeScriptRunTask;
