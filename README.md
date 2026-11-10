@@ -290,10 +290,12 @@ protected devices cannot be paused.
 
 Scripts generated before this change used Windows UI Automation and may still
 navigate or scroll the window. Re-copy the device script to get the background
-helper, or replace the old UI Automation helper function with the new
-`Set-LanternPaused` function while keeping the rest of your Wi-Fi detection
-logic. The example pause/resume commands remain commented out until you enable
-the actions you intend to run.
+helper. To update an existing custom script, replace its UI Automation setup,
+helper functions, and Overview navigation/scroll block with the new generated
+`Set-LanternPaused` helper and pause identifier. Keep your Wi-Fi scanning,
+SSID matching, and existing `Set-LanternPaused -AutomationId ... -Paused ...`
+calls. The example pause/resume commands in a newly copied template remain
+commented out until you enable the actions you intend to run.
 
 ## Domain visibility and blocking
 
