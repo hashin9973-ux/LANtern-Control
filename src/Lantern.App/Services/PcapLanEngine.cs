@@ -23,6 +23,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private static readonly TimeSpan MaximumForwardingQueueWait = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan QueueWaitSampleFreshness = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan CaptureStatisticsInterval = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan MaximumArpEnforcementSilence = TimeSpan.FromSeconds(15);
     private readonly SemaphoreSlim refreshSync = new(1, 1);
     private readonly AsyncTransitionLock lifecycleGate = new();
     private readonly EngineDiagnosticLog diagnosticLog = new();
@@ -1461,6 +1462,23 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
     private string? GetLiveHealthWarning()
     {
+        var nowUtcTicks = DateTimeOffset.UtcNow.UtcTicks;
+        var hasInterceptionTargets = clientMappings.Mappings.Any(
+            client => policy.GetInterceptionTargets(client.Value.ToString()) != InterceptionTargets.None);
+        var lastArpInjectionUtcTicks = Interlocked.Read(ref this.lastArpInjectionUtcTicks);
+        if (ArpEnforcementHealthPolicy.IsStale(
+                hasInterceptionTargets,
+                lastArpInjectionUtcTicks,
+                nowUtcTicks,
+                MaximumArpEnforcementSilence))
+        {
+            var age = lastArpInjectionUtcTicks <= 0
+                ? "no successful ARP injection has been recorded"
+                : $"the last successful ARP injection was " +
+                  $"{TimeSpan.FromTicks(nowUtcTicks - lastArpInjectionUtcTicks).TotalSeconds:N1} seconds ago";
+            return $"Paused-device ARP enforcement is stale: {age}.";
+        }
+
         var currentCaptureQueue = captureQueue;
         if (currentCaptureQueue is not null &&
             currentCaptureQueue.BufferedBytes >= CaptureQueueMaximumBytes * QueuePressureThreshold)
@@ -1481,7 +1499,6 @@ public sealed class PcapLanEngine : IAsyncDisposable
             return "Forwarding injection queue is above 75% capacity.";
         }
 
-        var nowUtcTicks = DateTimeOffset.UtcNow.UtcTicks;
         var arpSampleUtcTicks = Interlocked.Read(ref lastArpInjectionUtcTicks);
         var arpLatency = TimeSpan.FromTicks(Interlocked.Read(ref lastArpQueueLatencyTicks));
         if (IsFreshQueueWaitSample(nowUtcTicks, arpSampleUtcTicks) &&
@@ -1964,8 +1981,11 @@ public sealed class PcapLanEngine : IAsyncDisposable
         }
     }
 
-    private void SendArpPacketDirect(byte[] bytes) =>
+    private void SendArpPacketDirect(byte[] bytes)
+    {
         SendInjectionPacket(bytes, "ARP");
+        RecordArpInjectionSuccess();
+    }
 
     private void SendInjectionPacket(byte[] bytes) =>
         SendInjectionPacket(bytes, "packet");
