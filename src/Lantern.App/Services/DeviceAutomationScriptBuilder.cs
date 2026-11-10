@@ -3,7 +3,8 @@ using Lantern.App.ViewModels;
 namespace Lantern.App.Services;
 
 /// <summary>
-/// Builds a ready-to-edit PowerShell UI Automation script for one device row.
+/// Builds a PowerShell script that controls one device through LANtern's local
+/// automation pipe without activating or navigating the application window.
 /// </summary>
 public static class DeviceAutomationScriptBuilder
 {
@@ -20,82 +21,17 @@ public static class DeviceAutomationScriptBuilder
             .Replace("\n", " ", StringComparison.Ordinal);
 
         return $$"""
-            # LANtern Control — per-device PowerShell UI Automation
+            # LANtern Control — per-device background PowerShell automation
             # Target device: {{displayName}}
-            # Paste this into the Script automation editor, then edit the example commands below.
-            # The examples are commented out so running this template unchanged makes no changes.
+            # LANtern must remain running; its window may be minimized.
+            # This script talks to LANtern through a current-user-only local named pipe.
+            # It does not use Windows UI Automation, activate the window, navigate pages, or scroll the device list.
 
             $ErrorActionPreference = 'Stop'
-
-            Add-Type -AssemblyName UIAutomationClient
-            Add-Type -AssemblyName UIAutomationTypes
-
-            $LanternProcess = Get-Process -ErrorAction SilentlyContinue |
-                Where-Object {
-                    $_.MainWindowTitle -eq 'LANtern Control' -and
-                    $_.MainWindowHandle -ne [IntPtr]::Zero
-                } |
-                Select-Object -First 1
-
-            if ($null -eq $LanternProcess) {
-                throw 'LANtern Control is not running in this Windows session.'
-            }
-
-            $script:LanternWindow = [System.Windows.Automation.AutomationElement]::FromHandle(
-                $LanternProcess.MainWindowHandle
-            )
-            if ($null -eq $script:LanternWindow) {
-                throw 'Could not connect to the LANtern Control window.'
-            }
-
-            function Get-LanternElement {
-                param(
-                    [Parameter(Mandatory)]
-                    [string]$AutomationId
-                )
-
-                $condition = [System.Windows.Automation.PropertyCondition]::new(
-                    [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
-                    $AutomationId
-                )
-                $element = $script:LanternWindow.FindFirst(
-                    [System.Windows.Automation.TreeScope]::Descendants,
-                    $condition
-                )
-                if ($null -eq $element) {
-                    throw "Could not find '$AutomationId'. Make sure this device row is visible in LANtern's device list."
-                }
-
-                return $element
-            }
-
-            function Set-LanternText {
-                param(
-                    [Parameter(Mandatory)]
-                    [string]$AutomationId,
-                    [Parameter(Mandatory)]
-                    [AllowEmptyString()]
-                    [string]$Value
-                )
-
-                $control = Get-LanternElement -AutomationId $AutomationId
-                if (-not $control.Current.IsEnabled) {
-                    throw "Control '$AutomationId' is disabled. Only controllable device rows can be edited."
-                }
-
-                $pattern = $control.GetCurrentPattern(
-                    [System.Windows.Automation.ValuePattern]::Pattern
-                )
-                if ($pattern.Current.IsReadOnly) {
-                    throw "Control '$AutomationId' is read-only."
-                }
-
-                $pattern.SetValue($Value)
-                # LANtern debounces TextBox-to-view-model updates by 350 ms.
-                Start-Sleep -Milliseconds 600
-            }
+            $script:LanternPipeName = '{{DeviceAutomationPipeServer.PipeName}}'
 
             function Set-LanternPaused {
+                [CmdletBinding()]
                 param(
                     [Parameter(Mandatory)]
                     [string]$AutomationId,
@@ -103,78 +39,55 @@ public static class DeviceAutomationScriptBuilder
                     [bool]$Paused
                 )
 
-                $control = Get-LanternElement -AutomationId $AutomationId
-                if (-not $control.Current.IsEnabled) {
-                    throw "Control '$AutomationId' is disabled. Only controllable device rows can be edited."
-                }
-
-                $pattern = $control.GetCurrentPattern(
-                    [System.Windows.Automation.TogglePattern]::Pattern
+                $pipe = [System.IO.Pipes.NamedPipeClientStream]::new(
+                    '.',
+                    $script:LanternPipeName,
+                    [System.IO.Pipes.PipeDirection]::InOut,
+                    [System.IO.Pipes.PipeOptions]::CurrentUserOnly
                 )
-                $desiredState = [System.Windows.Automation.ToggleState]::Off
-                if ($Paused) {
-                    $desiredState = [System.Windows.Automation.ToggleState]::On
-                }
+                $encoding = [System.Text.UTF8Encoding]::new($false)
+                $writer = $null
+                $reader = $null
 
-                # Toggle only when the current state differs from the requested state.
-                if ($pattern.Current.ToggleState -ne $desiredState) {
-                    $pattern.Toggle()
-                }
-            }
-
-            $DeviceRowAutomationId = '{{device.RowAutomationId}}'
-            $DeviceNameAutomationId = '{{device.NameAutomationId}}'
-            $DownloadLimitAutomationId = '{{device.DownloadLimitAutomationId}}'
-            $UploadLimitAutomationId = '{{device.UploadLimitAutomationId}}'
-            $PauseAutomationId = '{{device.PauseAutomationId}}'
-
-            # The editor is a separate page, so switch back to Overview before targeting device controls.
-            $OverviewNavigationButton = Get-LanternElement -AutomationId 'nav_overview'
-            $OverviewInvokePattern = $OverviewNavigationButton.GetCurrentPattern(
-                [System.Windows.Automation.InvokePattern]::Pattern
-            )
-            $OverviewInvokePattern.Invoke()
-            Start-Sleep -Milliseconds 500
-
-            # Bring the target row into the visible device list. This also handles DataGrid virtualization.
-            $MainScrollViewer = Get-LanternElement -AutomationId 'main_scroll_viewer'
-            $ScrollPattern = $MainScrollViewer.GetCurrentPattern(
-                [System.Windows.Automation.ScrollPattern]::Pattern
-            )
-            $DeviceRow = $null
-            for ($attempt = 0; $attempt -lt 400 -and $null -eq $DeviceRow; $attempt++) {
                 try {
-                    $DeviceRow = Get-LanternElement -AutomationId $DeviceRowAutomationId
-                }
-                catch {
-                    $DeviceRow = $null
-                }
+                    $pipe.Connect(3000)
+                    $writer = [System.IO.StreamWriter]::new($pipe, $encoding, 1024, $true)
+                    $writer.AutoFlush = $true
+                    $reader = [System.IO.StreamReader]::new($pipe, $encoding, $false, 1024, $true)
 
-                if ($null -eq $DeviceRow) {
-                    if (-not $ScrollPattern.Current.VerticallyScrollable) {
-                        break
+                    $request = [ordered]@{
+                        protocolVersion = 1
+                        command = 'SetPaused'
+                        automationId = $AutomationId
+                        paused = $Paused
+                    }
+                    $writer.WriteLine(($request | ConvertTo-Json -Compress))
+                    $responseJson = $reader.ReadLine()
+                    if ([string]::IsNullOrWhiteSpace($responseJson)) {
+                        throw 'LANtern closed the automation connection without returning a result.'
                     }
 
-                    $ScrollPattern.ScrollVertical(
-                        [System.Windows.Automation.ScrollAmount]::LargeIncrement
-                    )
-                    Start-Sleep -Milliseconds 40
+                    $response = ConvertFrom-Json -InputObject $responseJson
+                    if (-not $response.success) {
+                        throw "LANtern could not update the device: $($response.error)"
+                    }
+
+                    return $response
+                }
+                finally {
+                    if ($null -ne $reader) { $reader.Dispose() }
+                    if ($null -ne $writer) { $writer.Dispose() }
+                    $pipe.Dispose()
                 }
             }
 
-            if ($null -eq $DeviceRow) {
-                throw "Could not bring device row '$DeviceRowAutomationId' into view. Scroll to that row in Overview, then retry."
-            }
+            $PauseAutomationId = '{{device.PauseAutomationId}}'
 
-            # Examples — uncomment and edit only the actions you intend to run.
-            # Rename this device:
-            # Set-LanternText -AutomationId $DeviceNameAutomationId -Value 'Living room TV'
-            # Set download limit in KB/s (0 = unlimited):
-            # Set-LanternText -AutomationId $DownloadLimitAutomationId -Value '500'
-            # Set upload limit in KB/s (0 = unlimited):
-            # Set-LanternText -AutomationId $UploadLimitAutomationId -Value '250'
-            # Pause or resume internet: $true pauses, $false resumes.
+            # Examples — uncomment the action you want to run.
+            # Pause internet:
             # Set-LanternPaused -AutomationId $PauseAutomationId -Paused $true
+            # Resume internet:
+            # Set-LanternPaused -AutomationId $PauseAutomationId -Paused $false
             """;
     }
 }

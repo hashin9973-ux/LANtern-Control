@@ -42,23 +42,58 @@ public sealed class DeviceViewModelTests
         Assert.Equal("copy_script_AABBCCDDEEFF", viewModel.CopyAutomationScriptButtonAutomationId);
 
         var script = Lantern.App.Services.DeviceAutomationScriptBuilder.Build(viewModel);
-        Assert.Contains("$DeviceRowAutomationId = 'device_AABBCCDDEEFF'", script, StringComparison.Ordinal);
-        Assert.Contains("$DeviceNameAutomationId = 'device_name_AABBCCDDEEFF'", script, StringComparison.Ordinal);
-        Assert.Contains("$DownloadLimitAutomationId = 'download_limit_AABBCCDDEEFF'", script, StringComparison.Ordinal);
-        Assert.Contains("$UploadLimitAutomationId = 'upload_limit_AABBCCDDEEFF'", script, StringComparison.Ordinal);
         Assert.Contains("$PauseAutomationId = 'pause_AABBCCDDEEFF'", script, StringComparison.Ordinal);
-        Assert.Contains("[System.Windows.Automation.ValuePattern]::Pattern", script, StringComparison.Ordinal);
-        Assert.Contains("[System.Windows.Automation.TogglePattern]::Pattern", script, StringComparison.Ordinal);
+        Assert.Contains("$script:LanternPipeName = 'LANternControl.DeviceAutomation.v1'", script, StringComparison.Ordinal);
+        Assert.Contains("[System.IO.Pipes.NamedPipeClientStream]::new", script, StringComparison.Ordinal);
+        Assert.Contains("$request | ConvertTo-Json -Compress", script, StringComparison.Ordinal);
         Assert.Contains("# Set-LanternPaused -AutomationId $PauseAutomationId -Paused $true", script, StringComparison.Ordinal);
-        Assert.Contains("$OverviewInvokePattern.Invoke()", script, StringComparison.Ordinal);
-        Assert.Contains("[System.Windows.Automation.ScrollPattern]::Pattern", script, StringComparison.Ordinal);
-        Assert.Contains("[System.Windows.Automation.ScrollAmount]::LargeIncrement", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("System.Windows.Automation", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("nav_overview", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("ScrollPattern", script, StringComparison.Ordinal);
 
         viewModel.EditableName = "Renamed device";
 
         Assert.Equal(rowAutomationId, viewModel.RowAutomationId);
         Assert.Equal("pause_AABBCCDDEEFF", viewModel.PauseAutomationId);
         Assert.Equal("copy_script_AABBCCDDEEFF", viewModel.CopyAutomationScriptButtonAutomationId);
+    }
+
+    [Fact]
+    public async Task SetPauseInternetAsync_AwaitsTheRuleApplication()
+    {
+        var applyRule = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var callbackCount = 0;
+        var forceApplyReceived = false;
+        var viewModel = new DeviceViewModel(
+            (_, forceApply) =>
+            {
+                callbackCount++;
+                forceApplyReceived = forceApply;
+                return applyRule.Task;
+            });
+        var registry = new DeviceRegistry();
+        registry.Observe(
+            IPAddress.Parse("192.168.31.42"),
+            PhysicalAddress.Parse("AABBCCDDEEFF"),
+            DateTimeOffset.UtcNow,
+            "test-device");
+        viewModel.Initialize(
+            Assert.Single(registry.Peek()),
+            null,
+            isProtectedDevice: false,
+            "Online");
+
+        var update = viewModel.SetPauseInternetAsync(paused: true);
+
+        Assert.True(viewModel.PauseInternet);
+        Assert.True(viewModel.HasActiveRule);
+        Assert.Equal(1, callbackCount);
+        Assert.True(forceApplyReceived);
+        Assert.False(update.IsCompleted);
+
+        applyRule.SetResult(true);
+        await update;
     }
 
     [Fact]
@@ -190,7 +225,7 @@ public sealed class DeviceViewModelTests
 
                     var sidebarVersion = Assert.IsType<TextBlock>(
                         window.FindName("SidebarVersionText"));
-                    Assert.Equal("v0.1.19", sidebarVersion.Text);
+                    Assert.Equal("v0.1.20", sidebarVersion.Text);
                     var listLayoutGrid = Assert.IsType<DataGrid>(window.FindName("DeviceGrid"));
                     Assert.True(
                         double.IsPositiveInfinity(listLayoutGrid.MaxHeight),

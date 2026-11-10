@@ -4,7 +4,7 @@
 
 # LANtern Control — Open-Source SelfishNet Alternative for Windows and Linux
 
-<a href="https://github.com/hashin9973-ux/LANtern-Control/releases/latest"><img alt="Release v0.1.11" src="https://img.shields.io/badge/release-v0.1.11-C51B3A?style=flat-square"></a>
+<a href="https://github.com/hashin9973-ux/LANtern-Control/releases/latest"><img alt="Release v0.1.20" src="https://img.shields.io/badge/release-v0.1.20-C51B3A?style=flat-square"></a>
 <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-C51B3A?style=flat-square"></a>
 <img alt="C#" src="https://img.shields.io/badge/language-C%23-239120?style=flat-square&amp;logo=csharp">
 <img alt=".NET 8" src="https://img.shields.io/badge/.NET-8.0-512BD4?style=flat-square&amp;logo=dotnet">
@@ -23,7 +23,7 @@ alternative with a modern desktop interface, LANtern Control is built for that
 use case.
 
 > [!IMPORTANT]
-> Windows `v0.1.11` is the current release. Linux `v0.1.0` is available as a
+> Windows `v0.1.20` is the current release. Linux `v0.1.0` is available as a
 > public beta AppImage. **macOS remains a work in progress (WIP).**
 
 ## Features
@@ -35,7 +35,7 @@ use case.
 - Keep a ten-minute network activity chart with 2.5-second samples.
 - Apply independent download and upload limits in `KB/s`.
 - Pause and restore a device's IPv4 internet connection.
-- Copy a complete, device-specific PowerShell UI Automation script directly from each device row.
+- Copy a complete, device-specific PowerShell script for focus-free background pause/resume automation.
 - Edit, save, and run PowerShell scripts in the Windows app from the dedicated **Script automation** page, with an optional configurable schedule.
 - Observe domains through DNS queries, TLS server names, and plain HTTP host
   headers without decrypting private HTTPS content.
@@ -104,7 +104,7 @@ be built from source with `scripts/publish.ps1`; see [Building from source](#bui
 
 ### Windows portable version
 
-1. Download `LANtern-Control-v0.1.11-win-x64.zip`.
+1. Download `LANtern-Control-v0.1.20-win-x64.zip`.
 2. Extract the complete archive to a folder where it can remain.
 3. Run `LANtern Control.exe` as Administrator from that folder. Keep the
    extracted files together; no application installation is required.
@@ -254,39 +254,48 @@ forwarded-traffic rates may not be available for devices that have no explicit
 control rule; use router/AP telemetry or a managed-switch mirror port for
 non-intrusive whole-network traffic monitoring.
 
-## Script automation and UI Automation
+## Script automation and background device control
 
-The Windows app includes a dedicated **Script automation** page in the left sidebar. Open it directly rather than scrolling through the device list. It contains a built-in PowerShell text editor. Use **Open…** to
-load an existing `.ps1` file, edit it in the app, and use **Save** or
-**Save As…**. When no file has been selected, **Save** creates
+The Windows app includes a dedicated **Script automation** page in the left
+sidebar with a built-in PowerShell editor. Use **Open…** to load a `.ps1`
+file, then **Save** or **Save As…**. With no selected file, **Save** creates
 `%LOCALAPPDATA%\LANternControl\Scripts\lantern-automation.ps1`. **Run now**
-saves the current editor contents before launching the script. Scheduled
-execution is disabled by default, requires explicit confirmation, runs every
-60–3600 seconds only while LANtern is open, and stops when the app closes.
-A running script is limited to two minutes; a new run is skipped while a
-previous run is still active. The selected script path, enabled state, and
-interval are saved in LANtern's local settings file. Closing LANtern stops
-the schedule; it does not register a Windows Task Scheduler job.
+saves the editor contents before launching the script. Scheduled execution is
+disabled by default, requires explicit confirmation, runs every 60–3600
+seconds while LANtern is open, and stops when the app closes. A running script
+is limited to two minutes; overlapping scheduled runs are skipped. The
+selected path, enabled state, and interval are saved in LANtern settings.
+Closing LANtern stops the schedule; it does not register a Windows Task
+Scheduler job.
 
 Scripts run as the same Windows account and with the same permissions as
-LANtern. When LANtern is elevated, child scripts inherit that elevated token.
+LANtern. The built-in runner starts PowerShell without showing a console
+window. When LANtern is elevated, child scripts inherit that elevated token.
+The local automation pipe also checks the Windows account and elevation level,
+so a manually launched script must run at the same elevation level as LANtern.
 Only run scripts you have inspected and understand. LANtern does not bypass
 the Windows PowerShell execution policy. Scheduled runs execute the last
 saved file; unsaved editor changes are not picked up until saved.
 
-Each controllable device row has a **Copy script** button beside its name. It
-copies a complete PowerShell UI Automation starter script containing that
-device's row, name, download-limit, upload-limit, and pause-switch identifiers,
-plus helper functions for `ValuePattern` text edits and `TogglePattern` pause /
-resume changes. The example actions are commented out so the copied template
-does not change a device until you edit and enable the commands. The device
-identifiers are derived from its MAC address rather than its sorted row number
-or display name, so they remain stable when the list is reordered. Inventory-only
-devices without a verified MAC cannot be controlled. Scripts are separate
-PowerShell processes and use Windows UI Automation to interact with controls
-exposed by LANtern; the generated script returns to Overview and attempts to
-scroll the device list until the row is visible. If it cannot expose the row,
-scroll to that device manually and rerun the script.
+Each controllable device row has a **Copy script** button. It creates a
+PowerShell helper for that device's stable pause identifier, derived from its
+MAC address rather than row order or display name. The helper sends an explicit
+pause/resume request over a local named pipe restricted to the current Windows
+user and applies the change through LANtern's existing device-rule path. It
+does not use Windows UI Automation, activate the LANtern window, change pages,
+or scroll the device list. **LANtern can stay minimized to the taskbar while
+the script runs.** The application must remain running and the device must
+already be present as a controllable device in LANtern. Inventory-only and
+protected devices cannot be paused.
+
+Scripts generated before this change used Windows UI Automation and may still
+navigate or scroll the window. Re-copy the device script to get the background
+helper. To update an existing custom script, replace its UI Automation setup,
+helper functions, and Overview navigation/scroll block with the new generated
+`Set-LanternPaused` helper and pause identifier. Keep your Wi-Fi scanning,
+SSID matching, and existing `Set-LanternPaused -AutomationId ... -Paused ...`
+calls. The example pause/resume commands in a newly copied template remain
+commented out until you enable the actions you intend to run.
 
 ## Domain visibility and blocking
 

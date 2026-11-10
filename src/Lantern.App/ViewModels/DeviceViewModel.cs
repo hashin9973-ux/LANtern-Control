@@ -7,7 +7,7 @@ namespace Lantern.App.ViewModels;
 
 public sealed class DeviceViewModel : INotifyPropertyChanged
 {
-    private readonly Func<DeviceViewModel, Task> changed;
+    private readonly Func<DeviceViewModel, bool, Task> changed;
     private string ipAddress = string.Empty;
     private string macAddress = string.Empty;
     private string displayName = "Unknown device";
@@ -27,7 +27,13 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
     private string protectedReason = string.Empty;
 
     public DeviceViewModel(Func<DeviceViewModel, Task> changed)
+        : this((device, _) => changed(device))
     {
+    }
+
+    public DeviceViewModel(Func<DeviceViewModel, bool, Task> changed)
+    {
+        ArgumentNullException.ThrowIfNull(changed);
         this.changed = changed;
     }
 
@@ -110,7 +116,7 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
             alias = normalized;
             OnPropertyChanged(nameof(Alias));
             DisplayName = alias ?? automaticName;
-            _ = changed(this);
+            NotifyChanged();
         }
     }
 
@@ -152,7 +158,7 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
             if (SetField(ref downloadLimit, Math.Max(0, value)))
             {
                 OnPropertyChanged(nameof(HasActiveRule));
-                _ = changed(this);
+                NotifyChanged();
             }
         }
     }
@@ -165,7 +171,7 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
             if (SetField(ref uploadLimit, Math.Max(0, value)))
             {
                 OnPropertyChanged(nameof(HasActiveRule));
-                _ = changed(this);
+                NotifyChanged();
             }
         }
     }
@@ -178,9 +184,21 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
             if (SetField(ref pauseInternet, value))
             {
                 OnPropertyChanged(nameof(HasActiveRule));
-                _ = changed(this);
+                NotifyChanged();
             }
         }
+    }
+
+    public Task SetPauseInternetAsync(bool paused)
+    {
+        if (SetField(ref pauseInternet, paused))
+        {
+            OnPropertyChanged(nameof(HasActiveRule));
+        }
+
+        // Reapply even when the value already matches. A previous attempt may
+        // have failed before the rule reached the packet engine.
+        return changed(this, true);
     }
 
     public bool IsProtected
@@ -298,6 +316,20 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(UploadLimitAutomationId));
         OnPropertyChanged(nameof(PauseAutomationId));
         OnPropertyChanged(nameof(CopyAutomationScriptButtonAutomationId));
+    }
+
+    private void NotifyChanged() => _ = NotifyChangedSafelyAsync();
+
+    private async Task NotifyChangedSafelyAsync()
+    {
+        try
+        {
+            await changed(this, false);
+        }
+        catch
+        {
+            // The owner reports rule-application failures through its status UI.
+        }
     }
 
     private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
