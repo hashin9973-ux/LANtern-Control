@@ -1757,6 +1757,9 @@ public sealed class PcapLanEngine : IAsyncDisposable
         {
             PoisonClient(pair);
         }
+
+        // Re-evaluate active enforcement after every scheduled poison cycle.
+        RefreshEngineHealth();
     }
 
     private async Task RestoreArpAsync()
@@ -2104,8 +2107,11 @@ public sealed class PcapLanEngine : IAsyncDisposable
         return true;
     }
 
-    private void RecordArpInjectionSuccess() =>
+    private void RecordArpInjectionSuccess()
+    {
         Interlocked.Exchange(ref lastArpInjectionUtcTicks, DateTimeOffset.UtcNow.UtcTicks);
+        RefreshEngineHealth();
+    }
 
     private void RecordArpQueueLatency(TimeSpan latency)
     {
