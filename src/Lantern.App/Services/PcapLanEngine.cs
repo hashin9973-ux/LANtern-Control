@@ -151,6 +151,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             DroppedPacketCount,
             Volatile.Read(ref injectionSendFailures),
             Volatile.Read(ref injectionRetryAttempts),
+            Interlocked.Read(ref injectionHandleReopenCount),
             currentCaptureQueue?.BufferedBytes ?? 0,
             currentInjectionQueue?.ForwardingQueueBytes ?? 0,
             currentInjectionQueue?.PriorityQueueBytes ?? 0,
