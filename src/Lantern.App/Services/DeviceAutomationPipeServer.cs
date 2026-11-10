@@ -47,6 +47,8 @@ public sealed class DeviceAutomationPipeServer : IAsyncDisposable
         this.pipeName = pipeName;
     }
 
+    public bool IsStarted => Volatile.Read(ref started) == 1;
+
     public void Start()
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
