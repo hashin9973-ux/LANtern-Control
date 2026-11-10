@@ -1126,7 +1126,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             if (matchedClient is null)
             {
                 throw new InvalidOperationException(
-                    $"The rule for {normalizedMac} was saved but not enforced: " +
+                    $"The rule for {normalizedMac} could not be enforced yet: " +
                     "there is no verified live IP/MAC mapping for this device. " +
                     "Run Scan devices while Control is running, then apply the rule again.");
             }
@@ -1638,11 +1638,6 @@ public sealed class PcapLanEngine : IAsyncDisposable
         }
 
         var needsPoison = clientMappings.Upsert(arp.SenderIp, arp.SenderMac);
-        if (temporaryProbeTargets?.Contains(arp.SenderIp) == true)
-        {
-            temporaryProbeResponders?.TryAdd(arp.SenderIp, 0);
-        }
-
         frameRouter?.UpdateClient(arp.SenderIp, arp.SenderMac);
         registry.Observe(
             arp.SenderIp,
