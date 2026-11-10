@@ -10,6 +10,20 @@ public static class PcapCaptureConfiguration
     public static DeviceConfiguration CreateForForwarding() =>
         Create(DeviceModes.None);
 
+    /// <summary>
+    /// Opens a dedicated Npcap handle used only for packet injection. It is
+    /// intentionally not started for capture, so receive loops never share
+    /// their pcap_t handle with the sender.
+    /// </summary>
+    public static DeviceConfiguration CreateForInjection() =>
+        new()
+        {
+            Mode = DeviceModes.None,
+            ReadTimeout = 100,
+            Snaplen = 65_536,
+            Immediate = false,
+        };
+
     private static DeviceConfiguration Create(DeviceModes mode) =>
         new()
         {

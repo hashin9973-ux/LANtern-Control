@@ -1917,6 +1917,9 @@ public partial class MainWindow : Window
         var arpAge = snapshot.LastArpInjectionAtUtc is { } arpAt
             ? $"{(DateTimeOffset.UtcNow - arpAt).TotalSeconds:N1}s ago"
             : "not sent yet";
+        var enforcementAge = snapshot.LastArpEnforcementAtUtc is { } enforcementAt
+            ? $"{(DateTimeOffset.UtcNow - enforcementAt).TotalSeconds:N1}s ago"
+            : "not yet successful";
 
         PacketHealthText.Text =
             $"{health} · {snapshot.CaptureLibraryVersion} · {nativeName} · " +
@@ -1929,14 +1932,19 @@ public partial class MainWindow : Window
             $"{snapshot.CaptureQueueDroppedPackets + snapshot.InjectionQueueDroppedPackets:N0} · " +
             $"send errors {snapshot.InjectionSendFailures:N0}, retries " +
             $"{snapshot.InjectionRetryAttempts:N0} · " +
+            $"injection handle {(snapshot.InjectionHandleOpen ? "open" : "closed")}, " +
+            $"reopens {snapshot.InjectionHandleReopenCount:N0} · " +
             $"ARP queue wait {snapshot.LastArpQueueLatencyMilliseconds:N1} ms, " +
             $"forward queue wait {snapshot.LastForwardingQueueLatencyMilliseconds:N1} ms · " +
-            $"{queueBytes} · capture {captureAge} · ARP send {arpAge}";
+            $"{queueBytes} · capture {captureAge} · ARP send {arpAge} · " +
+            $"enforcement {enforcementAge}";
 
-        if (!string.IsNullOrWhiteSpace(snapshot.NativeLibraryError) ||
+        if (!string.IsNullOrWhiteSpace(snapshot.Failure) ||
+            !string.IsNullOrWhiteSpace(snapshot.NativeLibraryError) ||
             !string.IsNullOrWhiteSpace(snapshot.CaptureStatisticsWarning))
         {
-            var diagnostic = snapshot.CaptureStatisticsWarning ??
+            var diagnostic = snapshot.Failure ??
+                             snapshot.CaptureStatisticsWarning ??
                              snapshot.NativeLibraryError;
             PacketHealthText.ToolTip = diagnostic;
         }
@@ -1946,7 +1954,10 @@ public partial class MainWindow : Window
                 $"SharpPcap {snapshot.SharpPcapVersion}; " +
                 $"native DLL {snapshot.NativeLibraryPath ?? "unverified"} " +
                 $"({snapshot.NativeLibraryFileVersion ?? "version unavailable"}). " +
-                $"Last forwarded injection: {snapshot.LastForwardedInjectionAtUtc?.ToString("O") ?? "not yet"}";
+                $"Last ARP enforcement: {snapshot.LastArpEnforcementAtUtc?.ToString("O") ?? "not yet"}; " +
+                $"Last forwarded injection: {snapshot.LastForwardedInjectionAtUtc?.ToString("O") ?? "not yet"}; " +
+                $"Dedicated injection handle: {(snapshot.InjectionHandleOpen ? "open" : "closed")}; " +
+                $"Last handle recovery: {snapshot.LastInjectionHandleRecoveryAtUtc?.ToString("O") ?? "never"}";
         }
     }
 

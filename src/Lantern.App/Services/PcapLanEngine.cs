@@ -12,7 +12,9 @@ namespace Lantern.App.Services;
 
 public sealed class PcapLanEngine : IAsyncDisposable
 {
-    private readonly object arpSendSync = new();
+    private readonly object injectionSendSync = new();
+    private readonly object temporaryProbeSendSync = new();
+    private static readonly TimeSpan InjectionHandleRecoveryCooldown = TimeSpan.FromSeconds(10);
     private const long CaptureQueueMaximumBytes = 32 * 1024 * 1024;
     private const long ForwardingQueueMaximumBytes = 32 * 1024 * 1024;
     private const long PriorityQueueMaximumBytes = 1024 * 1024;
@@ -21,6 +23,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private static readonly TimeSpan MaximumForwardingQueueWait = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan QueueWaitSampleFreshness = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan CaptureStatisticsInterval = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan MaximumArpEnforcementSilence = TimeSpan.FromSeconds(15);
     private readonly SemaphoreSlim refreshSync = new(1, 1);
     private readonly AsyncTransitionLock lifecycleGate = new();
     private readonly EngineDiagnosticLog diagnosticLog = new();
@@ -42,11 +45,14 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private PriorityPacketInjectionQueue? injectionQueue;
     private PcapRuntimeInfo? pcapRuntimeInfo;
     private readonly EngineHealthFaultRegistry healthFaults = new();
+    private readonly EngineHealthState healthState = new();
     private string? captureStatisticsWarning;
     private uint previousCaptureReceived;
     private uint previousCaptureDropped;
     private bool captureStatisticsInitialized;
-    private int engineHealthy;
+    private long lastInjectionHandleRecoveryAttemptUtcTicks;
+    private long lastInjectionHandleRecoveryUtcTicks;
+    private long injectionHandleReopenCount;
     private int injectionRetryAttempts;
     private int injectionSendFailures;
     private long captureReceivedPackets;
@@ -70,9 +76,11 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private long injectionQueueDroppedPackets;
     private long lastCaptureUtcTicks;
     private long lastArpInjectionUtcTicks;
+    private long lastArpEnforcementUtcTicks;
     private long lastForwardedInjectionUtcTicks;
     private LibPcapLiveDevice? arpDevice;
     private LibPcapLiveDevice? forwardingDevice;
+    private LibPcapLiveDevice? injectionDevice;
     private AdapterProfile? profile;
     private PhysicalAddress? gatewayMac;
     private FrameRouter? frameRouter;
@@ -99,13 +107,18 @@ public sealed class PcapLanEngine : IAsyncDisposable
         profile is not null ||
         engineCancellation is not null ||
         arpDevice is not null ||
-        forwardingDevice is not null;
+        forwardingDevice is not null ||
+        injectionDevice is not null;
 
-    public bool IsHealthy =>
+    public bool IsHealthy => healthState.IsHealthy && AreHealthPrerequisitesSatisfied();
+
+    private bool AreHealthPrerequisitesSatisfied() =>
         IsRunning &&
         arpDevice?.Opened == true &&
         forwardingDevice?.Opened == true &&
-        Volatile.Read(ref engineHealthy) == 1 &&
+        injectionDevice?.Opened == true &&
+        controlling &&
+        !restoring &&
         backgroundFailure is null &&
         healthFaults.IsHealthy &&
         Volatile.Read(ref captureStatisticsWarning) is null &&
@@ -123,10 +136,15 @@ public sealed class PcapLanEngine : IAsyncDisposable
         return new PcapEngineHealthSnapshot(
             IsRunning,
             IsHealthy,
+            injectionDevice?.Opened == true,
             backgroundFailure ??
                 GetTransientDegradedReason() ??
                 Volatile.Read(ref captureStatisticsWarning) ??
                 GetLiveHealthWarning() ??
+                (!controlling || restoring ? "The controller is not actively enforcing policy." : null) ??
+                (arpDevice?.Opened != true ? "The ARP capture handle is closed." : null) ??
+                (forwardingDevice?.Opened != true ? "The IPv4 capture handle is closed." : null) ??
+                (injectionDevice?.Opened != true ? "The dedicated injection handle is closed." : null) ??
                 (runtime?.NativeLibraryPath is null ? runtime?.Error : null),
             runtime?.CaptureLibraryVersion ?? "Not loaded",
             runtime?.SharpPcapVersion ?? "Unknown",
@@ -140,6 +158,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             DroppedPacketCount,
             Volatile.Read(ref injectionSendFailures),
             Volatile.Read(ref injectionRetryAttempts),
+            Interlocked.Read(ref injectionHandleReopenCount),
             currentCaptureQueue?.BufferedBytes ?? 0,
             currentInjectionQueue?.ForwardingQueueBytes ?? 0,
             currentInjectionQueue?.PriorityQueueBytes ?? 0,
@@ -152,7 +171,9 @@ public sealed class PcapLanEngine : IAsyncDisposable
             TimeSpan.FromTicks(Interlocked.Read(ref lastForwardingQueueLatencyTicks)).TotalMilliseconds,
             ReadTimestamp(Interlocked.Read(ref lastCaptureUtcTicks)),
             ReadTimestamp(Interlocked.Read(ref lastArpInjectionUtcTicks)),
+            ReadTimestamp(Interlocked.Read(ref lastArpEnforcementUtcTicks)),
             ReadTimestamp(Interlocked.Read(ref lastForwardedInjectionUtcTicks)),
+            ReadTimestamp(Interlocked.Read(ref lastInjectionHandleRecoveryUtcTicks)),
             Volatile.Read(ref captureStatisticsWarning),
             runtime?.Error);
     }
@@ -232,7 +253,10 @@ public sealed class PcapLanEngine : IAsyncDisposable
             controlling = false;
             backgroundFailure = null;
             healthFaults.Clear();
-            Volatile.Write(ref engineHealthy, 0);
+            healthState.BeginStart();
+            Interlocked.Exchange(ref lastInjectionHandleRecoveryAttemptUtcTicks, 0);
+            Interlocked.Exchange(ref lastInjectionHandleRecoveryUtcTicks, 0);
+            Interlocked.Exchange(ref injectionHandleReopenCount, 0);
             Interlocked.Exchange(ref forwardedPacketCount, 0);
             Interlocked.Exchange(ref droppedPacketCount, 0);
             Interlocked.Exchange(ref captureReceivedPackets, 0);
@@ -258,6 +282,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             Interlocked.Exchange(ref injectionSendFailures, 0);
             Interlocked.Exchange(ref lastCaptureUtcTicks, 0);
             Interlocked.Exchange(ref lastArpInjectionUtcTicks, 0);
+            Interlocked.Exchange(ref lastArpEnforcementUtcTicks, 0);
             Interlocked.Exchange(ref lastForwardedInjectionUtcTicks, 0);
             captureStatisticsInitialized = false;
             captureStatisticsWarning = null;
@@ -276,11 +301,16 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 arpDevice.Filter = "arp";
                 arpDevice.StartCapture();
 
-                forwardingDevice = new LibPcapLiveDevice(
-                    captureDevice.Interface ??
-                    throw new InvalidOperationException("The capture adapter has no interface."));
+                var captureInterface = captureDevice.Interface ??
+                    throw new InvalidOperationException("The capture adapter has no interface.");
+                forwardingDevice = new LibPcapLiveDevice(captureInterface);
                 forwardingDevice.Open(PcapCaptureConfiguration.CreateForForwarding());
                 forwardingDevice.Filter = "ip";
+
+                // Keep packet writes on a dedicated handle. The ARP and IPv4
+                // receive handles are owned only by their capture readers.
+                injectionDevice = new LibPcapLiveDevice(captureInterface);
+                injectionDevice.Open(PcapCaptureConfiguration.CreateForInjection());
                 DriverName = captureDevice.Description ?? captureDevice.Name;
 
                 // Force SharpPcap to resolve its native capture library, then record
@@ -398,6 +428,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
                     !IsRunning ||
                     arpDevice?.Opened != true ||
                     forwardingDevice?.Opened != true ||
+                    injectionDevice?.Opened != true ||
                     backgroundTask?.IsCompleted == true)
                 {
                     throw new InvalidOperationException(
@@ -405,7 +436,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 }
 
                 PoisonClients();
-                Volatile.Write(ref engineHealthy, 1);
+                healthState.CompleteStart(AreHealthPrerequisitesSatisfied());
                 var activeMessage = IsHealthy
                     ? "Control is running — packet capture, queue pressure, Npcap drops, and injection health are being monitored."
                     : $"Control is running in DEGRADED mode: {GetHealthSnapshot().Failure ?? "packet health could not be fully verified."}";
@@ -432,7 +463,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
                     ref backgroundFailure,
                     $"Startup failed: {exception.Message}",
                     null);
-                Volatile.Write(ref engineHealthy, 0);
+                healthState.MarkDegraded();
                 controlling = false;
                 await StopCoreAsync("startup-failure");
                 if (failure is not null)
@@ -752,7 +783,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             return await SendBatchesAsync(
                 (address, bytes) =>
                 {
-                    lock (arpSendSync)
+                    lock (temporaryProbeSendSync)
                     {
                         captureDevice.SendPacket(bytes);
                     }
@@ -917,7 +948,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             "stopping",
             reason);
         controlling = false;
-        Volatile.Write(ref engineHealthy, 0);
+        healthState.MarkDegraded();
 
         // Let an in-flight presence/discovery probe finish before restoration.
         // Once the semaphore is acquired, no maintenance probe can enqueue ARP
@@ -981,6 +1012,16 @@ public sealed class PcapLanEngine : IAsyncDisposable
             forwardingDevice = null;
         }
 
+        var activeInjectionDevice = injectionDevice;
+        if (activeInjectionDevice is not null)
+        {
+            AttemptDeviceCleanup(
+                "packet injection handle close",
+                activeInjectionDevice.Close,
+                shutdownWarnings);
+            injectionDevice = null;
+        }
+
         engineCancellation?.Dispose();
         engineCancellation = null;
         backgroundTask = null;
@@ -991,6 +1032,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
         gatewayMac = null;
         profile = null;
         restoring = false;
+        healthState.Stop();
         var shutdownWarning = shutdownWarnings.Count == 0
             ? null
             : string.Join(" | ", shutdownWarnings);
@@ -1325,7 +1367,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             return;
         }
 
-        Volatile.Write(ref engineHealthy, 0);
+        healthState.MarkDegraded();
         diagnosticLog.Write(
             "packet-health.degraded",
             "packet-processing",
@@ -1430,6 +1472,23 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
     private string? GetLiveHealthWarning()
     {
+        var nowUtcTicks = DateTimeOffset.UtcNow.UtcTicks;
+        var hasInterceptionTargets = clientMappings.Mappings.Any(
+            client => policy.GetInterceptionTargets(client.Value.ToString()) != InterceptionTargets.None);
+        var lastArpEnforcementUtcTicks = Interlocked.Read(ref this.lastArpEnforcementUtcTicks);
+        if (ArpEnforcementHealthPolicy.IsStale(
+                hasInterceptionTargets,
+                lastArpEnforcementUtcTicks,
+                nowUtcTicks,
+                MaximumArpEnforcementSilence))
+        {
+            var age = lastArpEnforcementUtcTicks <= 0
+                ? "no successful paused-device enforcement injection has been recorded"
+                : $"the last successful paused-device enforcement injection was " +
+                  $"{TimeSpan.FromTicks(nowUtcTicks - lastArpEnforcementUtcTicks).TotalSeconds:N1} seconds ago";
+            return $"Paused-device ARP enforcement is stale: {age}.";
+        }
+
         var currentCaptureQueue = captureQueue;
         if (currentCaptureQueue is not null &&
             currentCaptureQueue.BufferedBytes >= CaptureQueueMaximumBytes * QueuePressureThreshold)
@@ -1450,7 +1509,6 @@ public sealed class PcapLanEngine : IAsyncDisposable
             return "Forwarding injection queue is above 75% capacity.";
         }
 
-        var nowUtcTicks = DateTimeOffset.UtcNow.UtcTicks;
         var arpSampleUtcTicks = Interlocked.Read(ref lastArpInjectionUtcTicks);
         var arpLatency = TimeSpan.FromTicks(Interlocked.Read(ref lastArpQueueLatencyTicks));
         if (IsFreshQueueWaitSample(nowUtcTicks, arpSampleUtcTicks) &&
@@ -1478,11 +1536,9 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
     private void RefreshEngineHealth()
     {
-        var healthy = IsHealthy;
-        var newValue = healthy ? 1 : 0;
-        var previous = Interlocked.Exchange(ref engineHealthy, newValue);
-        if (previous != newValue)
+        if (healthState.Refresh(AreHealthPrerequisitesSatisfied()))
         {
+            var healthy = IsHealthy;
             var message = healthy
                 ? "Packet capture and processing queues recovered; enforcement health is restored."
                 : "Packet processing health is degraded.";
@@ -1711,6 +1767,9 @@ public sealed class PcapLanEngine : IAsyncDisposable
         {
             PoisonClient(pair);
         }
+
+        // Re-evaluate active enforcement after every scheduled poison cycle.
+        RefreshEngineHealth();
     }
 
     private async Task RestoreArpAsync()
@@ -1759,7 +1818,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             client.Value);
         foreach (var frame in frames.Select(targets))
         {
-            SendArpPacket(frame);
+            SendArpPacket(frame, isEnforcement: true);
         }
 
         var controllerFrames = ArpInterceptionFrames.BuildControllerProtection(
@@ -1769,8 +1828,8 @@ public sealed class PcapLanEngine : IAsyncDisposable
             activeProfile.GatewayAddress,
             client.Value,
             client.Key);
-        SendArpPacket(controllerFrames.ClientToController);
-        SendArpPacket(controllerFrames.GatewayToController);
+        SendArpPacket(controllerFrames.ClientToController, isEnforcement: true);
+        SendArpPacket(controllerFrames.GatewayToController, isEnforcement: true);
     }
 
     private async Task ApplyInterceptionTransitionAsync(
@@ -1859,7 +1918,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 activeGatewayMac,
                 request.SenderIp,
                 requestingClient);
-            SendArpPacket(frames.ToClient);
+            SendArpPacket(frames.ToClient, isEnforcement: true);
             return;
         }
 
@@ -1878,16 +1937,16 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 activeGatewayMac,
                 request.TargetIp,
                 requestedClient);
-            SendArpPacket(frames.ToGateway);
+            SendArpPacket(frames.ToGateway, isEnforcement: true);
         }
     }
 
-    private void SendArpPacket(byte[] bytes)
+    private void SendArpPacket(byte[] bytes, bool isEnforcement = false)
     {
         var activeQueue = injectionQueue;
         if (activeQueue is null || injectionWorkerTask?.IsCompleted == true)
         {
-            SendArpPacketDirect(bytes);
+            SendArpPacketDirect(bytes, isEnforcement);
             return;
         }
 
@@ -1895,7 +1954,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
         {
             activeQueue.EnqueuePriority(
             bytes,
-            RecordArpInjectionSuccess,
+            isEnforcement ? RecordArpEnforcementSuccess : RecordArpInjectionSuccess,
             RecordArpQueueLatency);
         }
         catch (InvalidOperationException exception)
@@ -1935,53 +1994,149 @@ public sealed class PcapLanEngine : IAsyncDisposable
         }
     }
 
-    private void SendArpPacketDirect(byte[] bytes)
+    private void SendArpPacketDirect(byte[] bytes, bool isEnforcement = false)
     {
-        var activeDevice = arpDevice ??
-            throw new InvalidOperationException("The ARP capture adapter is not open.");
-        try
+        SendInjectionPacket(bytes, "ARP");
+        if (isEnforcement)
         {
-            lock (arpSendSync)
+            RecordArpEnforcementSuccess();
+        }
+        else
+        {
+            RecordArpInjectionSuccess();
+        }
+    }
+
+    private void SendInjectionPacket(byte[] bytes) =>
+        SendInjectionPacket(bytes, "packet");
+
+    private void SendInjectionPacket(byte[] bytes, string packetKind)
+    {
+        lock (injectionSendSync)
+        {
+            var activeDevice = PacketInjectionPolicy.SelectInjectionHandle(injectionDevice);
+            try
             {
                 activeDevice.SendPacket(bytes);
             }
+            catch (Exception exception)
+            {
+                Interlocked.Increment(ref injectionSendFailures);
+                var adapterName = profile?.Name ?? "unknown adapter";
+                string recoveryMessage;
+                try
+                {
+                    recoveryMessage = TryReopenInjectionHandle(exception)
+                        ? "The dedicated injection handle was reopened; the bounded retry will retry this packet."
+                        : "The injection-handle recovery cooldown is active.";
+                }
+                catch (Exception recoveryException)
+                {
+                    diagnosticLog.Write(
+                        "packet-injection.handle-reopen-failed",
+                        "Npcap injection handle",
+                        adapterName,
+                        "degraded",
+                        "The failed injection handle could not be reopened.",
+                        new AggregateException(exception, recoveryException));
+                    throw new InvalidOperationException(
+                        $"Npcap rejected a {packetKind} on '{adapterName}' ({bytes.Length} bytes), " +
+                        $"and reopening the dedicated injection handle failed: {recoveryException.Message}",
+                        new AggregateException(exception, recoveryException));
+                }
 
-            RecordArpInjectionSuccess();
-        }
-        catch (Exception exception)
-        {
-            var adapterName = profile?.Name ?? "unknown adapter";
-            Interlocked.Increment(ref injectionSendFailures);
-            throw new InvalidOperationException(
-                $"Npcap rejected an ARP packet on '{adapterName}' " +
-                $"({bytes.Length} bytes): {exception.Message}",
-                exception);
+                throw new InvalidOperationException(
+                    $"Npcap rejected a {packetKind} on '{adapterName}' ({bytes.Length} bytes): " +
+                    $"{exception.Message} {recoveryMessage}",
+                    exception);
+            }
         }
     }
 
-    private void SendInjectionPacket(byte[] bytes)
+    /// <summary>
+    /// Recreates only the send handle after a native injection failure. Capture
+    /// handles and their readers remain untouched. The cooldown bounds recovery
+    /// attempts; if a fresh handle cannot send, normal supervised shutdown applies.
+    /// </summary>
+    private bool TryReopenInjectionHandle(Exception sendFailure)
     {
-        // Some Wi-Fi drivers accept injection only through the established ARP
-        // handle. All post-start sends are serialized by this dedicated worker,
-        // so forwarding can no longer hold the send lock ahead of ARP refreshes.
-        var activeDevice = PacketInjectionPolicy.SelectHandle(arpDevice, forwardingDevice);
+        var nowUtcTicks = DateTimeOffset.UtcNow.UtcTicks;
+        var previousAttempt = Interlocked.Read(ref lastInjectionHandleRecoveryAttemptUtcTicks);
+        if (previousAttempt > 0 &&
+            nowUtcTicks >= previousAttempt &&
+            nowUtcTicks - previousAttempt < InjectionHandleRecoveryCooldown.Ticks)
+        {
+            return false;
+        }
+
+        Interlocked.Exchange(ref lastInjectionHandleRecoveryAttemptUtcTicks, nowUtcTicks);
+        var activeInterface = arpDevice?.Interface ??
+            throw new InvalidOperationException("The active adapter interface is no longer available.");
+
+        var failedHandle = injectionDevice ??
+            throw new InvalidOperationException("The dedicated injection handle is unavailable.");
+        diagnosticLog.Write(
+            "packet-injection.handle-reopen-starting",
+            "Npcap injection handle",
+            profile?.Name,
+            "recovering",
+            "A packet send failed; reopening only the injection handle.",
+            sendFailure);
+
+        // No other sender can hold this handle: all writes and this recovery
+        // execute under injectionSendSync, and shutdown awaits the worker.
+        failedHandle.Close();
+
+        var replacement = new LibPcapLiveDevice(activeInterface);
         try
         {
-            activeDevice.SendPacket(bytes);
+            replacement.Open(PcapCaptureConfiguration.CreateForInjection());
         }
-        catch (Exception exception)
+        catch
         {
-            Interlocked.Increment(ref injectionSendFailures);
-            var adapterName = profile?.Name ?? "unknown adapter";
-            throw new InvalidOperationException(
-                $"Npcap rejected a packet on '{adapterName}' ({bytes.Length} bytes): " +
-                $"{exception.Message}",
-                exception);
+            try
+            {
+                replacement.Close();
+            }
+            catch (Exception cleanupException)
+            {
+                diagnosticLog.Write(
+                    "packet-injection.replacement-cleanup-failed",
+                    "Npcap injection handle",
+                    profile?.Name,
+                    "degraded",
+                    "The replacement handle failed to open and also failed cleanup.",
+                    cleanupException);
+            }
+
+            throw;
         }
+
+        injectionDevice = replacement;
+        Interlocked.Increment(ref injectionHandleReopenCount);
+        Interlocked.Exchange(ref lastInjectionHandleRecoveryUtcTicks, nowUtcTicks);
+        diagnosticLog.Write(
+            "packet-injection.handle-reopened",
+            "Npcap injection handle",
+            profile?.Name,
+            "recovering",
+            "A fresh dedicated injection handle opened; the original packet is being retried.");
+        return true;
     }
 
-    private void RecordArpInjectionSuccess() =>
+    private void RecordArpInjectionSuccess()
+    {
         Interlocked.Exchange(ref lastArpInjectionUtcTicks, DateTimeOffset.UtcNow.UtcTicks);
+        RefreshEngineHealth();
+    }
+
+    private void RecordArpEnforcementSuccess()
+    {
+        var nowUtcTicks = DateTimeOffset.UtcNow.UtcTicks;
+        Interlocked.Exchange(ref lastArpEnforcementUtcTicks, nowUtcTicks);
+        Interlocked.Exchange(ref lastArpInjectionUtcTicks, nowUtcTicks);
+        RefreshEngineHealth();
+    }
 
     private void RecordArpQueueLatency(TimeSpan latency)
     {
@@ -2112,7 +2267,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
         }
 
         controlling = false;
-        Volatile.Write(ref engineHealthy, 0);
+        healthState.MarkDegraded();
         diagnosticLog.Write(
             "controller.faulted",
             source,
