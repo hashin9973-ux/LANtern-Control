@@ -25,6 +25,10 @@ public static class DeviceProbePolicy
 
     public static TimeSpan DiscoveryRetrySpacing { get; } = TimeSpan.FromMilliseconds(10);
 
+    // Retained for the Linux engine's independent discovery cadence. Windows
+    // scheduled full scans use the user-configured interval instead.
+    public static TimeSpan DiscoveryInterval { get; } = TimeSpan.FromSeconds(60);
+
     public const int MaxDiscoveryTargetsPerScan = 253;
 
     public static TimeSpan ReplyWindow { get; } = TimeSpan.FromMilliseconds(900);

@@ -292,6 +292,7 @@ public sealed class DeviceProbePolicyTests
         Assert.Equal(TimeSpan.FromMilliseconds(10), DeviceProbePolicy.DiscoveryRequestSpacing);
         Assert.Equal(TimeSpan.FromMilliseconds(10), DeviceProbePolicy.DiscoveryRetrySpacing);
         Assert.Equal(253, DeviceProbePolicy.MaxDiscoveryTargetsPerScan);
+        Assert.Equal(TimeSpan.FromSeconds(60), DeviceProbePolicy.DiscoveryInterval);
     }
 
 
