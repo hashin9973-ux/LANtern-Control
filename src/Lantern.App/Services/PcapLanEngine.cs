@@ -14,7 +14,6 @@ public sealed class PcapLanEngine : IAsyncDisposable
 {
     private readonly object injectionSendSync = new();
     private readonly object temporaryProbeSendSync = new();
-    private static readonly TimeSpan InjectionHandleRecoveryCooldown = TimeSpan.FromSeconds(10);
     private const long CaptureQueueMaximumBytes = 32 * 1024 * 1024;
     private const long ForwardingQueueMaximumBytes = 32 * 1024 * 1024;
     private const long PriorityQueueMaximumBytes = 1024 * 1024;
@@ -50,7 +49,6 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private uint previousCaptureReceived;
     private uint previousCaptureDropped;
     private bool captureStatisticsInitialized;
-    private long lastInjectionHandleRecoveryAttemptUtcTicks;
     private long lastInjectionHandleRecoveryUtcTicks;
     private long injectionHandleReopenCount;
     private int injectionRetryAttempts;
@@ -261,7 +259,6 @@ public sealed class PcapLanEngine : IAsyncDisposable
             backgroundFailure = null;
             healthFaults.Clear();
             healthState.BeginStart();
-            Interlocked.Exchange(ref lastInjectionHandleRecoveryAttemptUtcTicks, 0);
             Interlocked.Exchange(ref lastInjectionHandleRecoveryUtcTicks, 0);
             Interlocked.Exchange(ref injectionHandleReopenCount, 0);
             Interlocked.Exchange(ref forwardedPacketCount, 0);
@@ -810,7 +807,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
                 {
                     lock (temporaryProbeSendSync)
                     {
-                        captureDevice.SendPacket(bytes);
+                        captureDevice.SendPacket(EthernetFrameCodec.PadToMinimumEthernetFrameSize(bytes));
                     }
 
                     lastPresenceProbeAt[address] = DateTimeOffset.UtcNow;
@@ -2048,98 +2045,108 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
     private void SendInjectionPacket(byte[] bytes, string packetKind)
     {
-        // ARP Ethernet frames are 42 bytes before link-layer padding. The
-        // minimum Ethernet frame is 60 bytes without its hardware-generated
-        // FCS; pad here so every Npcap egress path gets a valid-sized frame.
+        // Keep Ethernet frame normalization at every egress boundary. ARP
+        // builders intentionally produce 42-byte protocol frames; Npcap must
+        // receive the 60-byte minimum Ethernet frame (excluding the FCS).
         var transmissionFrame = EthernetFrameCodec.PadToMinimumEthernetFrameSize(bytes);
 
         lock (injectionSendSync)
         {
-            var activeDevice = PacketInjectionPolicy.SelectInjectionHandle(injectionDevice);
+            var adapterName = profile?.Name ?? "unknown adapter";
             try
             {
-                activeDevice.SendPacket(transmissionFrame);
+                var activeDevice = PacketInjectionRecovery.Send(
+                    injectionDevice,
+                    OpenInjectionHandle,
+                    static (device, frame) => device.SendPacket(frame),
+                    static device =>
+                    {
+                        if (device.Opened)
+                        {
+                            device.Close();
+                        }
+                    },
+                    transmissionFrame,
+                    out var recovered,
+                    exception =>
+                    {
+                        Interlocked.Increment(ref injectionSendFailures);
+                        diagnosticLog.Write(
+                            "packet-injection.send-attempt-failed",
+                            "Npcap injection handle",
+                            adapterName,
+                            "recovering",
+                            "A packet send or injection-handle open failed; a replacement handle will be tested with the same frame.",
+                            exception);
+                    },
+                    cleanupException =>
+                        diagnosticLog.Write(
+                            "packet-injection.handle-cleanup-failed",
+                            "Npcap injection handle",
+                            adapterName,
+                            "degraded",
+                            "A failed injection handle could not be closed cleanly; recovery will continue with a new handle.",
+                            cleanupException));
+
+                // A replacement handle is promoted only after it has actually
+                // transmitted the frame that failed on the previous handle.
+                injectionDevice = activeDevice;
+                if (recovered)
+                {
+                    var recoveredAtUtcTicks = DateTimeOffset.UtcNow.UtcTicks;
+                    Interlocked.Increment(ref injectionHandleReopenCount);
+                    Interlocked.Exchange(
+                        ref lastInjectionHandleRecoveryUtcTicks,
+                        recoveredAtUtcTicks);
+                    diagnosticLog.Write(
+                        "packet-injection.handle-recovered",
+                        "Npcap injection handle",
+                        adapterName,
+                        "recovered",
+                        "A replacement injection handle successfully transmitted the original packet.");
+                }
             }
             catch (Exception exception)
             {
-                Interlocked.Increment(ref injectionSendFailures);
-                var adapterName = profile?.Name ?? "unknown adapter";
-                string recoveryMessage;
-                try
-                {
-                    recoveryMessage = TryReopenInjectionHandle(exception)
-                        ? "The dedicated injection handle was reopened; the bounded retry will retry this packet."
-                        : "The injection-handle recovery cooldown is active.";
-                }
-                catch (Exception recoveryException)
-                {
-                    diagnosticLog.Write(
-                        "packet-injection.handle-reopen-failed",
-                        "Npcap injection handle",
-                        adapterName,
-                        "degraded",
-                        "The failed injection handle could not be reopened.",
-                        new AggregateException(exception, recoveryException));
-                    throw new InvalidOperationException(
-                        $"Npcap rejected a {packetKind} on '{adapterName}' " +
-                        $"({transmissionFrame.Length}-byte frame; {bytes.Length}-byte input), " +
-                        $"and reopening the dedicated injection handle failed: {recoveryException.Message}",
-                        new AggregateException(exception, recoveryException));
-                }
-
+                // PacketInjectionRecovery closes every handle that failed to
+                // transmit. Do not retain a closed handle for the next retry.
+                injectionDevice = null;
+                diagnosticLog.Write(
+                    "packet-injection.send-recovery-failed",
+                    "Npcap injection handle",
+                    adapterName,
+                    "degraded",
+                    $"Npcap could not transmit a {packetKind} after a bounded handle-reopen attempt " +
+                    $"({transmissionFrame.Length}-byte frame; {bytes.Length}-byte input).",
+                    exception);
                 throw new InvalidOperationException(
-                    $"Npcap rejected a {packetKind} on '{adapterName}' " +
-                    $"({transmissionFrame.Length}-byte frame; {bytes.Length}-byte input): " +
-                    $"{exception.Message} {recoveryMessage}",
+                    $"Npcap could not send a {packetKind} on '{adapterName}' " +
+                    $"({transmissionFrame.Length}-byte frame; {bytes.Length}-byte input) " +
+                    $"after a bounded handle-reopen attempt: {exception.Message}",
                     exception);
             }
         }
     }
 
-    /// <summary>
-    /// Recreates only the send handle after a native injection failure. Capture
-    /// handles and their readers remain untouched. The cooldown bounds recovery
-    /// attempts; if a fresh handle cannot send, normal supervised shutdown applies.
-    /// </summary>
-    private bool TryReopenInjectionHandle(Exception sendFailure)
+    private LibPcapLiveDevice OpenInjectionHandle()
     {
-        var nowUtcTicks = DateTimeOffset.UtcNow.UtcTicks;
-        var previousAttempt = Interlocked.Read(ref lastInjectionHandleRecoveryAttemptUtcTicks);
-        if (previousAttempt > 0 &&
-            nowUtcTicks >= previousAttempt &&
-            nowUtcTicks - previousAttempt < InjectionHandleRecoveryCooldown.Ticks)
-        {
-            return false;
-        }
-
-        Interlocked.Exchange(ref lastInjectionHandleRecoveryAttemptUtcTicks, nowUtcTicks);
         var activeInterface = arpDevice?.Interface ??
-            throw new InvalidOperationException("The active adapter interface is no longer available.");
-
-        var failedHandle = injectionDevice ??
-            throw new InvalidOperationException("The dedicated injection handle is unavailable.");
-        diagnosticLog.Write(
-            "packet-injection.handle-reopen-starting",
-            "Npcap injection handle",
-            profile?.Name,
-            "recovering",
-            "A packet send failed; reopening only the injection handle.",
-            sendFailure);
-
-        // No other sender can hold this handle: all writes and this recovery
-        // execute under injectionSendSync, and shutdown awaits the worker.
-        failedHandle.Close();
-
-        var replacement = new LibPcapLiveDevice(activeInterface);
+            throw new InvalidOperationException(
+                "The active adapter interface is no longer available for packet injection.");
+        var device = new LibPcapLiveDevice(activeInterface);
         try
         {
-            replacement.Open(PcapCaptureConfiguration.CreateForInjection());
+            device.Open(PcapCaptureConfiguration.CreateForInjection());
+            return device;
         }
         catch
         {
             try
             {
-                replacement.Close();
+                if (device.Opened)
+                {
+                    device.Close();
+                }
             }
             catch (Exception cleanupException)
             {
@@ -2148,23 +2155,12 @@ public sealed class PcapLanEngine : IAsyncDisposable
                     "Npcap injection handle",
                     profile?.Name,
                     "degraded",
-                    "The replacement handle failed to open and also failed cleanup.",
+                    "A newly opened injection handle failed during setup and also failed cleanup.",
                     cleanupException);
             }
 
             throw;
         }
-
-        injectionDevice = replacement;
-        Interlocked.Increment(ref injectionHandleReopenCount);
-        Interlocked.Exchange(ref lastInjectionHandleRecoveryUtcTicks, nowUtcTicks);
-        diagnosticLog.Write(
-            "packet-injection.handle-reopened",
-            "Npcap injection handle",
-            profile?.Name,
-            "recovering",
-            "A fresh dedicated injection handle opened; the original packet is being retried.");
-        return true;
     }
 
     private void RecordArpInjectionSuccess()
