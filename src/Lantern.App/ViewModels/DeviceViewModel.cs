@@ -198,7 +198,7 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
 
         // Reapply even when the value already matches. A previous attempt may
         // have failed before the rule reached the packet engine.
-        return changed(this, forceApply: true);
+        return changed(this, true);
     }
 
     public bool IsProtected
@@ -324,7 +324,7 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
     {
         try
         {
-            await changed(this, forceApply: false);
+            await changed(this, false);
         }
         catch
         {
