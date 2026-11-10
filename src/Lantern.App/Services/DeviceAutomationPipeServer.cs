@@ -199,7 +199,15 @@ public sealed class DeviceAutomationPipeServer : IAsyncDisposable
             return false;
         }
 
-        return automationId.AsSpan(prefix.Length).IndexOfAnyExcept("0123456789ABCDEFabcdef") < 0;
+        foreach (var character in automationId.AsSpan(prefix.Length))
+        {
+            if (!Uri.IsHexDigit(character))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static async Task<string?> ReadLineAsync(
