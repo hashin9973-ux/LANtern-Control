@@ -110,7 +110,7 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
             alias = normalized;
             OnPropertyChanged(nameof(Alias));
             DisplayName = alias ?? automaticName;
-            _ = changed(this);
+            NotifyChanged();
         }
     }
 
@@ -152,7 +152,7 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
             if (SetField(ref downloadLimit, Math.Max(0, value)))
             {
                 OnPropertyChanged(nameof(HasActiveRule));
-                _ = changed(this);
+                NotifyChanged();
             }
         }
     }
@@ -165,7 +165,7 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
             if (SetField(ref uploadLimit, Math.Max(0, value)))
             {
                 OnPropertyChanged(nameof(HasActiveRule));
-                _ = changed(this);
+                NotifyChanged();
             }
         }
     }
@@ -178,9 +178,20 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
             if (SetField(ref pauseInternet, value))
             {
                 OnPropertyChanged(nameof(HasActiveRule));
-                _ = changed(this);
+                NotifyChanged();
             }
         }
+    }
+
+    public Task SetPauseInternetAsync(bool paused)
+    {
+        if (!SetField(ref pauseInternet, paused))
+        {
+            return Task.CompletedTask;
+        }
+
+        OnPropertyChanged(nameof(HasActiveRule));
+        return changed(this);
     }
 
     public bool IsProtected
@@ -298,6 +309,20 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(UploadLimitAutomationId));
         OnPropertyChanged(nameof(PauseAutomationId));
         OnPropertyChanged(nameof(CopyAutomationScriptButtonAutomationId));
+    }
+
+    private void NotifyChanged() => _ = NotifyChangedSafelyAsync();
+
+    private async Task NotifyChangedSafelyAsync()
+    {
+        try
+        {
+            await changed(this);
+        }
+        catch
+        {
+            // The owner reports rule-application failures through its status UI.
+        }
     }
 
     private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
