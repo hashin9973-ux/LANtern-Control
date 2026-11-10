@@ -179,6 +179,51 @@ public sealed class DeviceProbePolicyTests
     }
 
     [Fact]
+    public void GetTargets_StartupRevalidationIncludesRememberedClientsButNeverUnknownSubnetAddresses()
+    {
+        var now = DateTimeOffset.Parse("2026-11-06T12:00:00Z");
+        var adapter = new AdapterProfile(
+            "wifi",
+            "Wi-Fi",
+            "Test Wi-Fi",
+            IPAddress.Parse("192.168.31.10"),
+            24,
+            IPAddress.Parse("192.168.31.1"),
+            PhysicalAddress.Parse("001122334455"));
+        var registry = new DeviceRegistry();
+        registry.Remember(
+            IPAddress.Parse("192.168.31.20"),
+            PhysicalAddress.Parse("AABBCCDDEE20"),
+            now.AddDays(-10),
+            "Old remembered phone",
+            now.AddDays(-10));
+        registry.Remember(
+            IPAddress.Parse("192.168.31.21"),
+            PhysicalAddress.Parse("AABBCCDDEE21"),
+            DateTimeOffset.MinValue,
+            "Legacy remembered tablet");
+        registry.Remember(
+            IPAddress.Parse("192.168.32.22"),
+            PhysicalAddress.Parse("AABBCCDDEE22"),
+            now.AddDays(-1),
+            "Different subnet");
+
+        var targets = DeviceProbePolicy.GetTargets(
+            registry.Peek(),
+            adapter,
+            now,
+            force: true);
+
+        Assert.Equal(
+            new[]
+            {
+                IPAddress.Parse("192.168.31.20"),
+                IPAddress.Parse("192.168.31.21"),
+            },
+            targets);
+    }
+
+    [Fact]
     public void GetDiscoveryTargets_EnumeratesLocalSegmentAndExcludesControllerAndGateway()
     {
         var local = IPAddress.Parse("192.168.31.10");

@@ -148,7 +148,7 @@ disconnecting the selected adapter, suspending, or rebooting.
    and reverse mDNS. Live IPs without a verified MAC remain visible as
    inventory-only entries. Select **Auto scan** and set an interval from
    60 to 3600 seconds to refresh the device list periodically while the app is open.
-4. Click **Start control** to enable the selected device rules and live capture.
+4. Click **Start control** to revalidate previously discovered devices and enable their saved rules with live capture. This startup check targets remembered addresses only; it does not scan the subnet. Newly discovered devices still require **Scan devices**.
 5. Enter a download or upload limit in `KB/s`. A value of `0` means unlimited.
 6. Use the **Internet** switch to pause or restore a device's connection.
 7. Open **Script automation** from the left sidebar. Use **Open…** to load a `.ps1` file, **Run now** to test it, or explicitly enable a 60–3600 second schedule. The schedule stops when LANtern closes and skips overlapping runs.

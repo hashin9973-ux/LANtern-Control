@@ -8,6 +8,8 @@ A background task that faults unexpectedly is reported with its component name a
 
 Automatic inventory refresh uses the Windows neighbor cache. Full-subnet discovery is reserved for an explicit manual scan. Errors in periodic presence probes and optional name resolution are observed and reported without being allowed to escape as unobserved background-task failures.
 
+When control starts, LANtern revalidates up to 100 previously known host addresses (saved discoveries and the Windows neighbor cache) with targeted ARP requests before completing startup. It does not enumerate the subnet at startup. Only consistent ARP observations received on the selected adapter populate the live client map used by the forwarding engine; those mappings let saved pause, rate-limit, and domain rules reach the packet path. A rule change for a device without a verified live mapping returns an explicit error instead of silently reporting that enforcement succeeded. Newly encountered hosts still require the user-initiated discovery scan.
+
 ## Packet pipeline
 
 The Windows ARP and IPv4 receive paths each use their own capture handle and dedicated reader. A third Npcap handle is opened for injection only; it is never started for capture and is the only handle used by the serialized sender. The capture reader copies captured frames into a byte-bounded queue; a second dedicated worker parses and applies the traffic policy. Npcap injection uses a priority queue for ARP/control frames and a bounded queue for forwarded traffic.
