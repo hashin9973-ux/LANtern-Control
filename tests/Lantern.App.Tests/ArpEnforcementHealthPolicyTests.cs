@@ -12,7 +12,7 @@ public sealed class ArpEnforcementHealthPolicyTests
     {
         Assert.False(ArpEnforcementHealthPolicy.IsStale(
             hasInterceptionTargets: false,
-            lastSuccessfulInjectionUtcTicks: 0,
+            lastSuccessfulEnforcementUtcTicks: 0,
             nowUtcTicks: TimeSpan.TicksPerSecond * 60,
             MaximumSilence));
     }
@@ -22,7 +22,7 @@ public sealed class ArpEnforcementHealthPolicyTests
     {
         Assert.True(ArpEnforcementHealthPolicy.IsStale(
             hasInterceptionTargets: true,
-            lastSuccessfulInjectionUtcTicks: 0,
+            lastSuccessfulEnforcementUtcTicks: 0,
             nowUtcTicks: TimeSpan.TicksPerSecond * 60,
             MaximumSilence));
     }
