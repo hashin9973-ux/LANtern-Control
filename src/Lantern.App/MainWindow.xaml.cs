@@ -2054,8 +2054,19 @@ public partial class MainWindow : Window
             return;
         }
 
+        // Before Loaded, no listener or script can be running. Let WPF complete
+        // this close normally instead of cancelling and recursively closing it.
+        if (!deviceAutomationPipeServer.IsStarted &&
+            !engine.IsRunning &&
+            activeScriptRunTask is null)
+        {
+            deviceAutomationPipeServer.DisposeAsync().GetAwaiter().GetResult();
+            closeAfterStop = true;
+            return;
+        }
+
         // Cancel synchronously before awaiting pipe/script/engine shutdown so WPF
-        // cannot close the window while an asynchronous cleanup is still running.
+        // cannot close the window while asynchronous cleanup is still running.
         eventArgs.Cancel = true;
         IsEnabled = false;
         try
@@ -2075,7 +2086,8 @@ public partial class MainWindow : Window
         finally
         {
             closeAfterStop = true;
-            Close();
+            // Close only after this Closing event has returned to the dispatcher.
+            Dispatcher.BeginInvoke(new Action(Close), DispatcherPriority.Background);
         }
     }
 
