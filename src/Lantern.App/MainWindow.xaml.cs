@@ -1917,6 +1917,9 @@ public partial class MainWindow : Window
         var arpAge = snapshot.LastArpInjectionAtUtc is { } arpAt
             ? $"{(DateTimeOffset.UtcNow - arpAt).TotalSeconds:N1}s ago"
             : "not sent yet";
+        var enforcementAge = snapshot.LastArpEnforcementAtUtc is { } enforcementAt
+            ? $"{(DateTimeOffset.UtcNow - enforcementAt).TotalSeconds:N1}s ago"
+            : "not yet successful";
 
         PacketHealthText.Text =
             $"{health} · {snapshot.CaptureLibraryVersion} · {nativeName} · " +
@@ -1933,7 +1936,8 @@ public partial class MainWindow : Window
             $"reopens {snapshot.InjectionHandleReopenCount:N0} · " +
             $"ARP queue wait {snapshot.LastArpQueueLatencyMilliseconds:N1} ms, " +
             $"forward queue wait {snapshot.LastForwardingQueueLatencyMilliseconds:N1} ms · " +
-            $"{queueBytes} · capture {captureAge} · ARP send {arpAge}";
+            $"{queueBytes} · capture {captureAge} · ARP send {arpAge} · " +
+            $"enforcement {enforcementAge}";
 
         if (!string.IsNullOrWhiteSpace(snapshot.Failure) ||
             !string.IsNullOrWhiteSpace(snapshot.NativeLibraryError) ||
@@ -1950,6 +1954,7 @@ public partial class MainWindow : Window
                 $"SharpPcap {snapshot.SharpPcapVersion}; " +
                 $"native DLL {snapshot.NativeLibraryPath ?? "unverified"} " +
                 $"({snapshot.NativeLibraryFileVersion ?? "version unavailable"}). " +
+                $"Last ARP enforcement: {snapshot.LastArpEnforcementAtUtc?.ToString("O") ?? "not yet"}; " +
                 $"Last forwarded injection: {snapshot.LastForwardedInjectionAtUtc?.ToString("O") ?? "not yet"}; " +
                 $"Dedicated injection handle: {(snapshot.InjectionHandleOpen ? "open" : "closed")}; " +
                 $"Last handle recovery: {snapshot.LastInjectionHandleRecoveryAtUtc?.ToString("O") ?? "never"}";
