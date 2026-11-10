@@ -84,7 +84,7 @@ public sealed class DeviceAutomationPipeServerTests
             ".",
             pipeName,
             PipeDirection.InOut,
-            PipeOptions.Asynchronous);
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
         await client.ConnectAsync(5000);
 
         var encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
