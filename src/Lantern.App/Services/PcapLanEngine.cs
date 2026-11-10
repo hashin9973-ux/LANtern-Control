@@ -242,6 +242,13 @@ public sealed class PcapLanEngine : IAsyncDisposable
             await NpfDriverService.EnsureAvailableAsync(cancellationToken);
             profile = adapter;
             clientMappings.BeginAdapter(adapter.Id);
+            // Presence-probe scheduling is per controller session. Reset it so
+            // known clients are actively revalidated before any saved rule is
+            // reported as running on this adapter.
+            lastPresenceProbeAt.Clear();
+            lastPresenceProbeBatchAt = DateTimeOffset.MinValue;
+            presenceProbeAdapterId = adapter.Id;
+            lastDiscoveryProbeBatchAt = DateTimeOffset.MinValue;
             resolvedNameClaims.Reset(rejectedResolvedNames);
             resolvingNames.Clear();
             registry.BeginSession();
@@ -424,6 +431,23 @@ public sealed class PcapLanEngine : IAsyncDisposable
                     cancellationToken);
 
                 await RefreshNeighborsAsync(cancellationToken);
+
+                // Revalidate only addresses already present in remembered
+                // inventory / the Windows neighbor cache. This is deliberately
+                // not a subnet scan: unknown addresses remain user-initiated.
+                RaiseStatus("Verifying previously discovered devices for traffic control…");
+                var startupPresence = await ProbeAddressesAsync(
+                    adapter,
+                    force: true,
+                    cancellationToken);
+                diagnosticLog.Write(
+                    "controller.startup-presence-probe-completed",
+                    "device presence",
+                    profile?.Name,
+                    "running",
+                    $"Sent {startupPresence.RequestsSent} known-client ARP probe(s); " +
+                    $"{startupPresence.DevicesResponded} verified client(s) replied.");
+
                 if (backgroundFailure is not null ||
                     !IsRunning ||
                     arpDevice?.Opened != true ||
@@ -437,9 +461,14 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
                 PoisonClients();
                 healthState.CompleteStart(AreHealthPrerequisitesSatisfied());
+                var presenceMessage = startupPresence.RequestsSent == 0
+                    ? "No previously discovered client addresses were available to verify. Run Scan devices before applying a device rule."
+                    : startupPresence.DevicesResponded == 0
+                        ? "No previously discovered clients replied to the startup ARP checks. Rules cannot be enforced until a client is reachable and verified."
+                        : $"Verified {startupPresence.DevicesResponded} previously discovered client(s) for control.";
                 var activeMessage = IsHealthy
-                    ? "Control is running — packet capture, queue pressure, Npcap drops, and injection health are being monitored."
-                    : $"Control is running in DEGRADED mode: {GetHealthSnapshot().Failure ?? "packet health could not be fully verified."}";
+                    ? $"Control is running — packet capture, queue pressure, Npcap drops, and injection health are being monitored. {presenceMessage}"
+                    : $"Control is running in DEGRADED mode: {GetHealthSnapshot().Failure ?? "packet health could not be fully verified."} {presenceMessage}";
                 diagnosticLog.Write(
                     "controller.running",
                     "lifecycle",
@@ -739,11 +768,10 @@ public sealed class PcapLanEngine : IAsyncDisposable
 
         if (arpDevice is not null)
         {
-            if (discoverSubnet)
-            {
-                BeginTemporaryProbeContext(activeProfile, targets, responders, createIdentityMonitor: false);
-            }
-
+            // Track replies from the active capture callback for both targeted
+            // presence checks and explicit discovery. The same verified ARP
+            // observation also populates clientMappings for packet forwarding.
+            BeginTemporaryProbeContext(activeProfile, targets, responders, createIdentityMonitor: false);
             try
             {
                 return await SendBatchesAsync(
@@ -755,10 +783,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             }
             finally
             {
-                if (discoverSubnet)
-                {
-                    EndTemporaryProbeContext();
-                }
+                EndTemporaryProbeContext();
             }
         }
 
@@ -1085,6 +1110,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
         if (controlling)
         {
             var normalizedMac = TrafficPolicy.NormalizeMac(macAddress);
+            KeyValuePair<IPAddress, PhysicalAddress>? matchedClient = null;
             foreach (var client in clients)
             {
                 if (string.Equals(
@@ -1092,12 +1118,22 @@ public sealed class PcapLanEngine : IAsyncDisposable
                         normalizedMac,
                         StringComparison.Ordinal))
                 {
-                    await ApplyInterceptionTransitionAsync(
-                        client,
-                        InterceptionTransition.Between(previousTargets, currentTargets));
+                    matchedClient = client;
                     break;
                 }
             }
+
+            if (matchedClient is null)
+            {
+                throw new InvalidOperationException(
+                    $"The rule for {normalizedMac} was saved but not enforced: " +
+                    "there is no verified live IP/MAC mapping for this device. " +
+                    "Run Scan devices while Control is running, then apply the rule again.");
+            }
+
+            await ApplyInterceptionTransitionAsync(
+                matchedClient.Value,
+                InterceptionTransition.Between(previousTargets, currentTargets));
         }
     }
 
@@ -1602,6 +1638,11 @@ public sealed class PcapLanEngine : IAsyncDisposable
         }
 
         var needsPoison = clientMappings.Upsert(arp.SenderIp, arp.SenderMac);
+        if (temporaryProbeTargets?.Contains(arp.SenderIp) == true)
+        {
+            temporaryProbeResponders?.TryAdd(arp.SenderIp, 0);
+        }
+
         frameRouter?.UpdateClient(arp.SenderIp, arp.SenderMac);
         registry.Observe(
             arp.SenderIp,
