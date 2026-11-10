@@ -1929,6 +1929,8 @@ public partial class MainWindow : Window
             $"{snapshot.CaptureQueueDroppedPackets + snapshot.InjectionQueueDroppedPackets:N0} · " +
             $"send errors {snapshot.InjectionSendFailures:N0}, retries " +
             $"{snapshot.InjectionRetryAttempts:N0} · " +
+            $"injection handle {(snapshot.InjectionHandleOpen ? "open" : "closed")}, " +
+            $"reopens {snapshot.InjectionHandleReopenCount:N0} · " +
             $"ARP queue wait {snapshot.LastArpQueueLatencyMilliseconds:N1} ms, " +
             $"forward queue wait {snapshot.LastForwardingQueueLatencyMilliseconds:N1} ms · " +
             $"{queueBytes} · capture {captureAge} · ARP send {arpAge}";
@@ -1946,7 +1948,9 @@ public partial class MainWindow : Window
                 $"SharpPcap {snapshot.SharpPcapVersion}; " +
                 $"native DLL {snapshot.NativeLibraryPath ?? "unverified"} " +
                 $"({snapshot.NativeLibraryFileVersion ?? "version unavailable"}). " +
-                $"Last forwarded injection: {snapshot.LastForwardedInjectionAtUtc?.ToString("O") ?? "not yet"}";
+                $"Last forwarded injection: {snapshot.LastForwardedInjectionAtUtc?.ToString("O") ?? "not yet"}; " +
+                $"Dedicated injection handle: {(snapshot.InjectionHandleOpen ? "open" : "closed")}; " +
+                $"Last handle recovery: {snapshot.LastInjectionHandleRecoveryAtUtc?.ToString("O") ?? "never"}";
         }
     }
 
