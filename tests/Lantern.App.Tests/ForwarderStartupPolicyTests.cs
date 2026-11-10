@@ -23,16 +23,20 @@ public sealed class ForwarderStartupPolicyTests
     }
 
     [Fact]
-    public void ForwardedPackets_UseTheEstablishedCaptureHandle()
+    public void ForwardedPackets_UseTheDedicatedInjectionHandle()
     {
-        var establishedCaptureHandle = new object();
-        var secondaryForwardingHandle = new object();
+        var injectionHandle = new object();
 
-        var selected = PacketInjectionPolicy.SelectHandle(
-            establishedCaptureHandle,
-            secondaryForwardingHandle);
+        var selected = PacketInjectionPolicy.SelectInjectionHandle(injectionHandle);
 
-        Assert.Same(establishedCaptureHandle, selected);
+        Assert.Same(injectionHandle, selected);
+    }
+
+    [Fact]
+    public void ForwardedPackets_RejectMissingInjectionHandle()
+    {
+        Assert.Throws<InvalidOperationException>(
+            () => PacketInjectionPolicy.SelectInjectionHandle<object>(null));
     }
 
     [Fact]
