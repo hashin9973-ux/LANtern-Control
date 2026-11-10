@@ -12,7 +12,12 @@ public static class ArpEnforcementHealthPolicy
         long nowUtcTicks,
         TimeSpan maximumSilence)
     {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumSilence);
+        if (maximumSilence <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maximumSilence),
+                "Maximum ARP enforcement silence must be positive.");
+        }
 
         if (!hasInterceptionTargets)
         {
