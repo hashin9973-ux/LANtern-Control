@@ -27,8 +27,8 @@ public static class PacketInjectionPolicy
     public static IReadOnlyList<byte[]> PrepareFrames(ReadOnlySpan<byte> capturedFrame) =>
         Ipv4FrameNormalizer.Normalize(capturedFrame);
 
-    public static T SelectHandle<T>(T? establishedCaptureHandle, T? secondaryHandle)
+    public static T SelectInjectionHandle<T>(T? injectionHandle)
         where T : class =>
-        establishedCaptureHandle ?? secondaryHandle ??
-        throw new InvalidOperationException("No packet injection adapter is open.");
+        injectionHandle ??
+        throw new InvalidOperationException("The dedicated packet injection handle is not open.");
 }
