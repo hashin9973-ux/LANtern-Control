@@ -2088,8 +2088,8 @@ public sealed class PcapLanEngine : IAsyncDisposable
                             "A failed injection handle could not be closed cleanly; recovery will continue with a new handle.",
                             cleanupException));
 
-                // A replacement handle is promoted only after it has actually
-                // transmitted the frame that failed on the previous handle.
+                // A replacement handle is promoted only after SendPacket returns
+                // normally for the frame that failed on the previous handle.
                 injectionDevice = activeDevice;
                 if (recovered)
                 {
@@ -2103,7 +2103,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
                         "Npcap injection handle",
                         adapterName,
                         "recovered",
-                        "A replacement injection handle successfully transmitted the original packet.");
+                        "A replacement injection handle accepted the original packet without a send error.");
                 }
             }
             catch (Exception exception)
