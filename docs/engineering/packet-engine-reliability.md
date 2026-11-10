@@ -10,7 +10,9 @@ Automatic inventory refresh uses the Windows neighbor cache. Full-subnet discove
 
 ## Packet pipeline
 
-The Windows capture reader uses a dedicated long-running worker thread. It copies captured frames into a byte-bounded queue; a second dedicated worker parses and applies the traffic policy. Npcap injection is serialized through a single worker with a priority queue for ARP/control frames and a bounded queue for forwarded traffic.
+The Windows ARP and IPv4 receive paths each use their own capture handle and dedicated reader. A third Npcap handle is opened for injection only; it is never started for capture and is the only handle used by the serialized sender. The capture reader copies captured frames into a byte-bounded queue; a second dedicated worker parses and applies the traffic policy. Npcap injection uses a priority queue for ARP/control frames and a bounded queue for forwarded traffic.
+
+If a native send fails, LANtern records the error and attempts one bounded reopen of the dedicated injection handle. The original packet is retried through the existing retry policy. Capture handles are left alone. If injection still fails, the supervised failure path disables enforcement and performs a safe shutdown rather than leaving the UI to claim that restrictions are active.
 
 The queue budgets are 32 MiB for captured frames, 32 MiB for forwarded injection, and 1 MiB for ARP/control injection. The budgets prevent memory growth from becoming unbounded. Reaching a budget causes an explicit drop/fault signal; it is not treated as successful forwarding.
 
@@ -18,7 +20,7 @@ Forwarded-packet send retries use a shorter delay than ARP/control retries so a 
 
 ## Health and diagnostics
 
-The UI distinguishes controller state from enforcement health. Running means the controller lifecycle still owns active resources or is in a transition. Active is shown only when both Npcap handles are open, the supervised loops are alive, the loaded capture library can be identified, capture statistics are readable, and there is no outstanding health fault or queue-pressure warning. A controller may remain Running while visibly Degraded.
+The UI distinguishes controller state from enforcement health. Running means the controller lifecycle still owns active resources or is in a transition. Active is shown only when the ARP and IPv4 capture handles and the dedicated injection handle are open, the supervised loops are alive, the loaded capture library can be identified, capture statistics are readable, and there is no outstanding health fault or queue-pressure warning. When a device has an active interception policy, the most recent successful ARP injection must also be recent; an open handle without successful enforcement traffic is not considered healthy. A controller may remain Running while visibly Degraded.
 
 The packet-health panel reports:
 
@@ -26,6 +28,7 @@ The packet-health panel reports:
 - Captured and forwarded packet/byte rates and LANtern process CPU share.
 - Npcap kernel capture drops, application capture/injection queue drops, and send/retry counts.
 - Capture, forwarding-injection, and ARP-priority queue occupancy.
+- Dedicated injection-handle open state, reopen count, and last recovery time.
 - Measured ARP and forwarding injection queue wait times and the last successful capture/injection timestamps.
 
 Capture statistics are sampled every two seconds. Queue pressure is reported before a queue is full; actual queue overflow is counted and marks enforcement health degraded. Independent health faults are tracked separately so recovery of one queue does not clear a simultaneous Npcap-drop or statistics fault.
@@ -38,7 +41,7 @@ Each entry records a UTC timestamp, event, component, adapter, state, reason, an
 
 ## Current validation boundary
 
-The automated tests cover the lifecycle transition lock, supervisor behavior, shutdown ordering and failure handling, byte-bounded capture queue, priority injection ordering and retry behavior, independent health faults, and structured diagnostics.
+The automated tests cover the lifecycle transition lock, supervisor behavior, shutdown ordering and failure handling, byte-bounded capture queue, priority injection ordering and retry behavior, recoverable health-state transitions, stale-ARP detection, independent health faults, and structured diagnostics.
 
 A Windows build and installer compilation validate packaging and dependency integration. They do not prove Npcap driver reliability during a sustained gaming workload. The following still require a live Windows network test on the target adapter:
 
