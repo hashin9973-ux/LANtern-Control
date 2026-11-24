@@ -258,7 +258,7 @@ public sealed class WindowsWifiNetworkMonitor
             hasAssociatedBssid = false;
         }
 
-        foreach (var line in output.Split(['\\r', '\\n']))
+        foreach (var line in output.Split(['\r', '\n']))
         {
             if (string.IsNullOrWhiteSpace(line))
             {
