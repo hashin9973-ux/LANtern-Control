@@ -2103,7 +2103,7 @@
                                    FontSize="22"
                                    FontWeight="Bold" />
                         <TextBlock Margin="0,6,0,0"
-                                   Text="Match a keyword against the connected Wi-Fi name (SSID). While it matches, the target device is paused. When it stops matching, LANtern restores the device's previous pause setting."
+                                   Text="Match a keyword against the connected Wi-Fi name (SSID). While control is active and it matches, the target device's normal Paused setting is turned on. When the SSID does not match or is unavailable, the target is unpaused."
                                    Foreground="{StaticResource SecondaryText}"
                                    FontSize="12"
                                    TextWrapping="Wrap" />
