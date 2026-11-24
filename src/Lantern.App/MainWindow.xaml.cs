@@ -74,6 +74,8 @@ public partial class MainWindow : Window
     private readonly ConcurrentQueue<DeviceDomainObservedEventArgs> pendingWebsiteActivity = new();
     private string? pendingEngineStatusMessage;
     private int engineStatusDispatchScheduled;
+    private string? pendingIdentityAlertMessage;
+    private int identityAlertDispatchScheduled;
     private PcapLanEngine engine;
     private AppSettings settings = new();
     private DateTimeOffset? controlStartedAt;
@@ -2448,11 +2450,32 @@ public partial class MainWindow : Window
 
     private void Engine_OnIdentityAlertDetected(object? sender, string warning)
     {
-        _ = Dispatcher.InvokeAsync(() =>
+        Interlocked.Exchange(ref pendingIdentityAlertMessage, warning);
+        if (Interlocked.Exchange(ref identityAlertDispatchScheduled, 1) == 0)
         {
-            DetailStatusText.Text = warning;
-            SetStatus(warning, false);
-        });
+            _ = Dispatcher.BeginInvoke(
+                new Action(DrainIdentityAlertDispatch),
+                DispatcherPriority.Background);
+        }
+    }
+
+    private void DrainIdentityAlertDispatch()
+    {
+        var latestWarning = Interlocked.Exchange(ref pendingIdentityAlertMessage, null);
+        if (latestWarning is not null)
+        {
+            DetailStatusText.Text = latestWarning;
+            SetStatus(latestWarning, false);
+        }
+
+        Interlocked.Exchange(ref identityAlertDispatchScheduled, 0);
+        if (Volatile.Read(ref pendingIdentityAlertMessage) is not null &&
+            Interlocked.Exchange(ref identityAlertDispatchScheduled, 1) == 0)
+        {
+            _ = Dispatcher.BeginInvoke(
+                new Action(DrainIdentityAlertDispatch),
+                DispatcherPriority.Background);
+        }
     }
 
     private void Engine_OnStateChanged(
