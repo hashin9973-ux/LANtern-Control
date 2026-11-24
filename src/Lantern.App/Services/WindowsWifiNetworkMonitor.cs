@@ -298,8 +298,26 @@ public sealed class WindowsWifiNetworkMonitor
             }
             else if (key.Equals("State", StringComparison.OrdinalIgnoreCase))
             {
-                stateSaysConnected = value.Equals("connected", StringComparison.OrdinalIgnoreCase);
-                stateSaysDisconnected = value.Equals("disconnected", StringComparison.OrdinalIgnoreCase);
+                stateSaysConnected =
+                    value.Equals("connected", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("verbunden", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("conectado", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("connecté", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("connesso", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("verbonden", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("已连接", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("接続済み", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("연결됨", StringComparison.OrdinalIgnoreCase);
+                stateSaysDisconnected =
+                    value.Equals("disconnected", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("getrennt", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("desconectado", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("déconnecté", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("disconnesso", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("verbroken", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("已断开连接", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("未接続", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("연결 끊김", StringComparison.OrdinalIgnoreCase);
             }
             else if (key.Equals("SSID", StringComparison.OrdinalIgnoreCase))
             {
