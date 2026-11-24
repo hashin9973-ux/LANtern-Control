@@ -699,7 +699,7 @@ public partial class MainWindow : Window
     {
         if (networkAutomationPollInProgress ||
             stopInProgress ||
-            !engine.IsRunning ||
+            !engine.IsControlling ||
             !settings.NetworkKeywordAutomations.Any(automation => automation.Enabled))
         {
             return;
@@ -714,7 +714,7 @@ public partial class MainWindow : Window
         await Task.Yield();
         try
         {
-            if (!engine.IsRunning)
+            if (!engine.IsControlling)
             {
                 foreach (var automation in settings.NetworkKeywordAutomations.Where(item => item.Enabled))
                 {
@@ -737,7 +737,7 @@ public partial class MainWindow : Window
             {
                 networkAutomationCancellation.Token.ThrowIfCancellationRequested();
                 var matches = NetworkKeywordPausePolicy.ShouldPause(
-                    engine.IsRunning,
+                    engine.IsControlling,
                     ssid,
                     automation.NetworkKeyword);
                 await ApplyNetworkAutomationPauseStateAsync(automation.DeviceMacAddress, matches);
