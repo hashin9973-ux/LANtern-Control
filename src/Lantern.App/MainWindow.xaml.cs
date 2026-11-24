@@ -2487,6 +2487,13 @@ public partial class MainWindow : Window
             ApplyEngineState(eventArgs.IsRunning, eventArgs.IsHealthy);
             DetailStatusText.Text = eventArgs.StatusMessage;
             RefreshEngineHealthDisplay();
+            if (!eventArgs.IsRunning &&
+                !stopInProgress &&
+                !startInProgress &&
+                settings.NetworkKeywordAutomations.Count > 0)
+            {
+                _ = RestoreActiveNetworkAutomationsAsync();
+            }
         });
     }
 
