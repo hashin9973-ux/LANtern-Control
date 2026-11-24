@@ -524,6 +524,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(selectedAdapter);
+        using var lifecycleTransition = await lifecycleGate.EnterAsync(cancellationToken);
         await refreshSync.WaitAsync(cancellationToken);
         try
         {

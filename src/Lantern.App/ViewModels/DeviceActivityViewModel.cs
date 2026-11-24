@@ -19,15 +19,18 @@ public sealed class DeviceActivityViewModel : INotifyPropertyChanged
         string ipAddress,
         string domain,
         DomainObservationSource source,
-        DateTimeOffset observedAt)
+        DateTimeOffset observedAt,
+        IEnumerable<DomainObservationSource>? additionalSources = null,
+        int observationCount = 1)
     {
         MacKey = macKey;
         this.deviceName = deviceName;
         this.ipAddress = ipAddress;
         Domain = domain;
         sources.Add(source);
+        if (additionalSources is not null) sources.UnionWith(additionalSources);
         lastSeen = observedAt;
-        hitCount = 1;
+        hitCount = Math.Max(1, observationCount);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -98,17 +101,22 @@ public sealed class DeviceActivityViewModel : INotifyPropertyChanged
         string latestDeviceName,
         string latestIpAddress,
         DomainObservationSource source,
-        DateTimeOffset observedAt)
+        DateTimeOffset observedAt,
+        IEnumerable<DomainObservationSource>? additionalSources = null,
+        int observationCount = 1)
     {
         DeviceName = latestDeviceName;
         IpAddress = latestIpAddress;
-        if (sources.Add(source))
+        var sourcesChanged = sources.Add(source);
+        if (additionalSources is not null)
         {
-            OnPropertyChanged(nameof(SourceLabel));
+            foreach (var additionalSource in additionalSources)
+                sourcesChanged |= sources.Add(additionalSource);
         }
 
+        if (sourcesChanged) OnPropertyChanged(nameof(SourceLabel));
         LastSeen = observedAt;
-        HitCount++;
+        HitCount += Math.Max(1, observationCount);
     }
 
     private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)

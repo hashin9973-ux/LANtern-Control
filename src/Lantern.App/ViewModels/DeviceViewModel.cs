@@ -189,12 +189,15 @@ public sealed class DeviceViewModel : INotifyPropertyChanged
         }
     }
 
-    public Task SetPauseInternetAsync(bool paused)
+    public void SynchronizePauseInternet(bool paused)
     {
         if (SetField(ref pauseInternet, paused))
-        {
             OnPropertyChanged(nameof(HasActiveRule));
-        }
+    }
+
+    public Task SetPauseInternetAsync(bool paused)
+    {
+        SynchronizePauseInternet(paused);
 
         // Reapply even when the value already matches. A previous attempt may
         // have failed before the rule reached the packet engine.
