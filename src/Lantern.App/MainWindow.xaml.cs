@@ -633,7 +633,7 @@ public partial class MainWindow : Window
             await settingsStore.SaveAsync(settings);
             settingsDirty = false;
             NetworkAutomationStatusText.Text =
-                $"Deleted the automation for {viewModel.DeviceName} and restored its previous pause setting.";
+                $"Deleted the automation for {viewModel.DeviceName}; the device was unpaused.";
             ConfigureNetworkAutomationTimer();
         }
         catch (Exception exception) when (
