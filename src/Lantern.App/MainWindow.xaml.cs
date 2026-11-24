@@ -592,8 +592,18 @@ public partial class MainWindow : Window
             settingsDirty = false;
             NetworkAutomationStatusText.Text = automation.Enabled
                 ? $"Automation enabled for {viewModel.DeviceName}."
-                : $"Automation disabled for {viewModel.DeviceName}; its previous pause state was restored.";
+                : $"Automation disabled for {viewModel.DeviceName}; the device was unpaused.";
+            if (automation.Enabled)
+            {
+                viewModel.UpdateEvaluationStatus("Checking Wi-Fi on next poll");
+            }
+            else
+            {
+                viewModel.UpdateEvaluationStatus("Disabled — device unpaused");
+            }
+
             ConfigureNetworkAutomationTimer();
+            StartNetworkAutomationPoll();
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or InvalidOperationException)
