@@ -48,4 +48,48 @@ public sealed class WindowsWifiNetworkMonitorTests
             """;
         Assert.Equal("Current-Network", WindowsWifiNetworkMonitor.ParseConnectedSsid(output));
     }
+
+    [Fact]
+    public void ParseConnectedSsid_UsesAssociatedBssidWhenStateValueIsLocalized()
+    {
+        const string output = """
+            Name : Wi-Fi
+            State : verbunden
+            SSID : Home-Network-5G
+            BSSID : 00:11:22:33:44:66
+            """;
+
+        Assert.Equal("Home-Network-5G", WindowsWifiNetworkMonitor.ParseConnectedSsid(output));
+    }
+
+    [Fact]
+    public void ParseConnectedSsid_DoesNotTreatAZeroBssidAsAnAssociation()
+    {
+        const string output = """
+            Name : Wi-Fi
+            State : disconnected
+            SSID : Saved-Network
+            BSSID : 00:00:00:00:00:00
+            """;
+
+        Assert.Null(WindowsWifiNetworkMonitor.ParseConnectedSsid(output));
+    }
+
+    [Fact]
+    public void ParseConnectedSsid_SkipsLocalizedDisconnectedInterfaceBeforeConnectedInterface()
+    {
+        const string output = """
+            Name : Wi-Fi
+            State : getrennt
+            SSID : Saved-Network
+            BSSID : 00:00:00:00:00:00
+
+            Name : Wi-Fi 2
+            State : verbunden
+            SSID : Current-Network
+            BSSID : 00:AA:BB:CC:DD:EE
+            """;
+
+        Assert.Equal("Current-Network", WindowsWifiNetworkMonitor.ParseConnectedSsid(output));
+    }
 }
