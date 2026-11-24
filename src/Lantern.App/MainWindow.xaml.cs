@@ -649,6 +649,7 @@ public partial class MainWindow : Window
     private void NetworkAutomationTimer_OnTick(object? sender, EventArgs eventArgs)
     {
         if (networkAutomationPollInProgress ||
+            stopInProgress ||
             !settings.NetworkKeywordAutomations.Any(automation => automation.Enabled))
             return;
 

@@ -42,9 +42,22 @@ public sealed class WindowsWifiNetworkMonitor
                 _ = await errorTask.ConfigureAwait(false);
                 return process.ExitCode == 0 ? ParseConnectedSsid(output) : null;
             }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException)
             {
                 TryKill(process);
+                try
+                {
+                    await Task.WhenAll(outputTask, errorTask).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (
+                    exception is OperationCanceledException or IOException)
+                {
+                    // The process was cancelled or terminated during cleanup.
+                }
+
+                if (cancellationToken.IsCancellationRequested)
+                    throw;
+
                 return null;
             }
         }
