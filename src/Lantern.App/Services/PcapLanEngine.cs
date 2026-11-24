@@ -36,6 +36,11 @@ public sealed class PcapLanEngine : IAsyncDisposable
     private readonly ResolvedDeviceNameClaims resolvedNameClaims = new(Dns.GetHostName());
     private readonly ConcurrentDictionary<string, byte> resolvingNames =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, long> lastNameResolutionAttemptTimestamp =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, string> notifiedDeviceIdentities =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static readonly TimeSpan NameResolutionRetryInterval = TimeSpan.FromMinutes(2);
     private CancellationTokenSource? engineCancellation;
     private Task? backgroundTask;
     private Task? injectionWorkerTask;
@@ -247,6 +252,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
             presenceProbeAdapterId = adapter.Id;
             resolvedNameClaims.Reset(rejectedResolvedNames);
             resolvingNames.Clear();
+            lastNameResolutionAttemptTimestamp.Clear();
             registry.BeginSession();
             identityMonitor.Reset();
             SeedRememberedInventory();
@@ -1246,13 +1252,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
         if (DhcpHostNameParser.TryParse(bytes, out var dhcpHost))
         {
             registry.SetHostName(dhcpHost.MacAddress, dhcpHost.HostName);
-            NotifyObserver(
-                "device identity notification",
-                () => DeviceIdentityLearned?.Invoke(
-                    this,
-                    new DeviceIdentityLearnedEventArgs(
-                        dhcpHost.MacAddress,
-                        dhcpHost.HostName)));
+            NotifyDeviceIdentityLearned(dhcpHost.MacAddress, dhcpHost.HostName);
         }
 
         var result = frameRouter.Route(bytes);
@@ -1625,7 +1625,10 @@ public sealed class PcapLanEngine : IAsyncDisposable
             arp.SenderMac,
             DateTimeOffset.UtcNow,
             GetKnownHostName(arp.SenderMac));
-        _ = ResolveNameSafelyAsync(arp.SenderIp, arp.SenderMac);
+        if (ShouldStartNameResolution(arp.SenderMac))
+        {
+            _ = ResolveNameSafelyAsync(arp.SenderIp, arp.SenderMac);
+        }
         RespondToArpRequest(arp);
         if (controlling && needsPoison)
         {
@@ -1634,6 +1637,67 @@ public sealed class PcapLanEngine : IAsyncDisposable
                     arp.SenderIp,
                     arp.SenderMac));
         }
+    }
+
+    private bool ShouldStartNameResolution(PhysicalAddress mac)
+    {
+        var key = TrafficPolicy.NormalizeMac(mac.ToString());
+        var now = Stopwatch.GetTimestamp();
+        while (true)
+        {
+            if (!lastNameResolutionAttemptTimestamp.TryGetValue(key, out var previousAttempt))
+            {
+                if (lastNameResolutionAttemptTimestamp.TryAdd(key, now))
+                {
+                    return true;
+                }
+
+                continue;
+            }
+
+            if (Stopwatch.GetElapsedTime(previousAttempt, now) < NameResolutionRetryInterval)
+            {
+                return false;
+            }
+
+            if (lastNameResolutionAttemptTimestamp.TryUpdate(key, now, previousAttempt))
+            {
+                return true;
+            }
+        }
+    }
+
+    private void NotifyDeviceIdentityLearned(PhysicalAddress mac, string hostName)
+    {
+        var key = TrafficPolicy.NormalizeMac(mac.ToString());
+        while (true)
+        {
+            if (!notifiedDeviceIdentities.TryGetValue(key, out var previousName))
+            {
+                if (notifiedDeviceIdentities.TryAdd(key, hostName))
+                {
+                    break;
+                }
+
+                continue;
+            }
+
+            if (string.Equals(previousName, hostName, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            if (notifiedDeviceIdentities.TryUpdate(key, hostName, previousName))
+            {
+                break;
+            }
+        }
+
+        NotifyObserver(
+            "device identity notification",
+            () => DeviceIdentityLearned?.Invoke(
+                this,
+                new DeviceIdentityLearnedEventArgs(mac, hostName)));
     }
 
     private async Task ResolveNameSafelyAsync(IPAddress address, PhysicalAddress mac)
@@ -1676,11 +1740,7 @@ public sealed class PcapLanEngine : IAsyncDisposable
                     registry.SetHostName(mac, acceptedName);
                     if (isNewClaim)
                     {
-                        NotifyObserver(
-                            "device identity notification",
-                            () => DeviceIdentityLearned?.Invoke(
-                                this,
-                                new DeviceIdentityLearnedEventArgs(mac, acceptedName)));
+                        NotifyDeviceIdentityLearned(mac, acceptedName);
                     }
 
                     return;
