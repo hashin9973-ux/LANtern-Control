@@ -72,6 +72,8 @@ public partial class MainWindow : Window
     private readonly WindowsWifiNetworkMonitor wifiNetworkMonitor = new();
     private readonly CancellationTokenSource networkAutomationCancellation = new();
     private readonly ConcurrentQueue<DeviceDomainObservedEventArgs> pendingWebsiteActivity = new();
+    private string? pendingEngineStatusMessage;
+    private int engineStatusDispatchScheduled;
     private PcapLanEngine engine;
     private AppSettings settings = new();
     private DateTimeOffset? controlStartedAt;
@@ -224,6 +226,12 @@ public partial class MainWindow : Window
         }
 
         LoadDomainRulesFromSettings();
+        if (NormalizeNetworkAutomationPauseStateOnStartup())
+        {
+            await settingsStore.SaveAsync(settings);
+            settingsDirty = false;
+        }
+
         NetworkAutomationPollIntervalTextBox.Text = settings.NetworkAutomationPollIntervalSeconds.ToString();
         LoadNetworkKeywordAutomations();
         ConfigureNetworkAutomationTimer();
@@ -319,6 +327,7 @@ public partial class MainWindow : Window
             await SaveSettingsIfDirtyAsync();
             SetStatus("Control active", true);
             refreshTimer.Start();
+            StartNetworkAutomationPoll();
         }
         catch (Exception exception)
         {
@@ -539,10 +548,17 @@ public partial class MainWindow : Window
         {
             await settingsStore.SaveAsync(settings);
             settingsDirty = false;
+            if (!engine.IsRunning)
+            {
+                await ApplyNetworkAutomationPauseStateAsync(device.MacKey, paused: false);
+            }
+
             NetworkAutomationKeywordTextBox.Clear();
-            NetworkAutomationStatusText.Text =
-                $"Added for {device.DisplayName}. A matching Wi-Fi name pauses this device; leaving the match restores its previous pause setting.";
+            NetworkAutomationStatusText.Text = engine.IsRunning
+                ? $"Added for {device.DisplayName}. Checking the connected Wi-Fi name now."
+                : $"Added for {device.DisplayName}. It will pause only while control is active and the Wi-Fi name matches.";
             ConfigureNetworkAutomationTimer();
+            StartNetworkAutomationPoll();
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException)
@@ -566,7 +582,11 @@ public partial class MainWindow : Window
         try
         {
             if (!automation.Enabled)
-                await RestoreNetworkAutomationPauseStateAsync(automation);
+            {
+                await ApplyNetworkAutomationPauseStateAsync(automation.DeviceMacAddress, paused: false);
+                automation.HasCapturedPauseState = false;
+                automation.OriginalPauseInternet = false;
+            }
 
             await settingsStore.SaveAsync(settings);
             settingsDirty = false;
@@ -595,7 +615,9 @@ public partial class MainWindow : Window
 
         try
         {
-            await RestoreNetworkAutomationPauseStateAsync(automation);
+            await ApplyNetworkAutomationPauseStateAsync(automation.DeviceMacAddress, paused: false);
+            automation.HasCapturedPauseState = false;
+            automation.OriginalPauseInternet = false;
             settings.NetworkKeywordAutomations.Remove(automation);
             NetworkKeywordAutomations.Remove(viewModel);
             await settingsStore.SaveAsync(settings);
@@ -648,10 +670,18 @@ public partial class MainWindow : Window
 
     private void NetworkAutomationTimer_OnTick(object? sender, EventArgs eventArgs)
     {
+        StartNetworkAutomationPoll();
+    }
+
+    private void StartNetworkAutomationPoll()
+    {
         if (networkAutomationPollInProgress ||
             stopInProgress ||
+            !engine.IsRunning ||
             !settings.NetworkKeywordAutomations.Any(automation => automation.Enabled))
+        {
             return;
+        }
 
         networkAutomationPollInProgress = true;
         activeNetworkAutomationPollTask = PollNetworkKeywordAutomationsAsync();
@@ -664,67 +694,45 @@ public partial class MainWindow : Window
         {
             if (!engine.IsRunning)
             {
-                NetworkAutomationStatusText.Text =
-                    "Automations are enabled and waiting for Start control.";
+                foreach (var automation in settings.NetworkKeywordAutomations.Where(item => item.Enabled))
+                {
+                    await ApplyNetworkAutomationPauseStateAsync(automation.DeviceMacAddress, paused: false);
+                    UpdateNetworkAutomationEvaluationStatus(automation.Id, "Waiting for control");
+                }
+
+                NetworkAutomationStatusText.Text = "Automations are waiting for Start control; target devices are unpaused.";
                 return;
             }
 
             var ssid = await wifiNetworkMonitor.GetCurrentSsidAsync(
                 networkAutomationCancellation.Token);
-            if (string.IsNullOrWhiteSpace(ssid))
-            {
-                foreach (var automation in settings.NetworkKeywordAutomations
-                             .Where(candidate => candidate.Enabled && candidate.HasCapturedPauseState)
-                             .ToArray())
-                {
-                    await RestoreNetworkAutomationPauseStateAsync(automation);
-                }
-
-                await SaveSettingsIfDirtyAsync();
-                NetworkAutomationStatusText.Text =
-                    "No connected Wi-Fi name is available. Any active automation pause was restored.";
-                return;
-            }
-
-            var changed = false;
+            var checkedCount = 0;
+            var pausedCount = 0;
+            var unpausedCount = 0;
             foreach (var automation in settings.NetworkKeywordAutomations
                          .Where(candidate => candidate.Enabled)
                          .ToArray())
             {
                 networkAutomationCancellation.Token.ThrowIfCancellationRequested();
-                var preferences = GetOrCreateDevicePreferences(automation.DeviceMacAddress);
-                var matches = ssid.Contains(automation.NetworkKeyword, StringComparison.OrdinalIgnoreCase);
-                if (matches)
-                {
-                    if (!automation.HasCapturedPauseState)
-                    {
-                        automation.OriginalPauseInternet = preferences.PauseInternet;
-                        automation.HasCapturedPauseState = true;
-                        settingsDirty = true;
-                        changed = true;
-                    }
-
-                    if (!preferences.PauseInternet)
-                    {
-                        await ApplyNetworkAutomationPauseStateAsync(automation.DeviceMacAddress, paused: true);
-                        changed = true;
-                    }
-                }
-                else if (automation.HasCapturedPauseState)
-                {
-                    await ApplyNetworkAutomationPauseStateAsync(
-                        automation.DeviceMacAddress,
-                        automation.OriginalPauseInternet);
-                    automation.HasCapturedPauseState = false;
-                    automation.OriginalPauseInternet = false;
-                    settingsDirty = true;
-                    changed = true;
-                }
+                var matches = NetworkKeywordPausePolicy.ShouldPause(
+                    engine.IsRunning,
+                    ssid,
+                    automation.NetworkKeyword);
+                await ApplyNetworkAutomationPauseStateAsync(automation.DeviceMacAddress, matches);
+                automation.HasCapturedPauseState = false;
+                automation.OriginalPauseInternet = false;
+                UpdateNetworkAutomationEvaluationStatus(
+                    automation.Id,
+                    matches ? "Match — device paused" : "No match — device unpaused");
+                checkedCount++;
+                if (matches) pausedCount++;
+                else unpausedCount++;
             }
 
-            if (changed) await SaveSettingsIfDirtyAsync();
-            NetworkAutomationStatusText.Text =
-                $"Connected Wi-Fi: {ssid}. Checked {settings.NetworkKeywordAutomations.Count(item => item.Enabled)} enabled automation(s).";
+            await SaveSettingsIfDirtyAsync();
+            NetworkAutomationStatusText.Text = string.IsNullOrWhiteSpace(ssid)
+                ? $"No connected Wi-Fi name was found. Checked {checkedCount} automation(s); target devices are unpaused."
+                : $"Connected Wi-Fi: {ssid}. Checked {checkedCount} automation(s): {pausedCount} paused, {unpausedCount} unpaused.";
         }
         catch (OperationCanceledException) when (networkAutomationCancellation.IsCancellationRequested)
         {
@@ -737,56 +745,91 @@ public partial class MainWindow : Window
         finally
         {
             networkAutomationPollInProgress = false;
+            activeNetworkAutomationPollTask = null;
         }
+    }
+
+    private void UpdateNetworkAutomationEvaluationStatus(string id, string status)
+    {
+        var viewModel = NetworkKeywordAutomations.FirstOrDefault(item =>
+            item.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+        viewModel?.UpdateEvaluationStatus(status);
+    }
+
+    private bool NormalizeNetworkAutomationPauseStateOnStartup()
+    {
+        var changed = false;
+        foreach (var automation in settings.NetworkKeywordAutomations)
+        {
+            if (settings.Devices.TryGetValue(automation.DeviceMacAddress, out var preferences) &&
+                preferences.PauseInternet)
+            {
+                preferences.PauseInternet = false;
+                changed = true;
+            }
+
+            if (automation.HasCapturedPauseState || automation.OriginalPauseInternet)
+            {
+                automation.HasCapturedPauseState = false;
+                automation.OriginalPauseInternet = false;
+                changed = true;
+            }
+        }
+
+        return changed;
     }
 
     private async Task RestoreActiveNetworkAutomationsAsync()
     {
         foreach (var automation in settings.NetworkKeywordAutomations.ToArray())
-            await RestoreNetworkAutomationPauseStateAsync(automation);
-        await SaveSettingsIfDirtyAsync();
-    }
+        {
+            await ApplyNetworkAutomationPauseStateAsync(automation.DeviceMacAddress, paused: false);
+            automation.HasCapturedPauseState = false;
+            automation.OriginalPauseInternet = false;
+            UpdateNetworkAutomationEvaluationStatus(automation.Id, "Waiting for control");
+        }
 
-    private async Task RestoreNetworkAutomationPauseStateAsync(NetworkKeywordAutomation automation)
-    {
-        if (!automation.HasCapturedPauseState) return;
-        await ApplyNetworkAutomationPauseStateAsync(
-            automation.DeviceMacAddress,
-            automation.OriginalPauseInternet);
-        automation.HasCapturedPauseState = false;
-        automation.OriginalPauseInternet = false;
-        settingsDirty = true;
+        await SaveSettingsIfDirtyAsync();
     }
 
     private async Task ApplyNetworkAutomationPauseStateAsync(string macAddress, bool paused)
     {
-        var preferences = GetOrCreateDevicePreferences(macAddress);
+        var normalizedMac = TrafficPolicy.NormalizeMac(macAddress);
+        var preferences = GetOrCreateDevicePreferences(normalizedMac);
+        if (deviceIndex.TryGetValue(normalizedMac, out var device) && device.CanControl)
+        {
+            if (device.PauseInternet != paused || preferences.PauseInternet != paused)
+            {
+                await device.SetPauseInternetAsync(paused);
+            }
+
+            return;
+        }
+
+        if (preferences.PauseInternet == paused)
+        {
+            return;
+        }
+
+        preferences.PauseInternet = paused;
         var rule = new TrafficRule(
                 paused,
                 preferences.DownloadKiloBytesPerSecond,
                 preferences.UploadKiloBytesPerSecond)
             .ForForwardingMode();
-
+        policy.SetRule(normalizedMac, rule);
         if (engine.IsRunning)
         {
             try
             {
-                await engine.ApplyRuleAsync(macAddress, rule);
+                await engine.ApplyRuleAsync(normalizedMac, rule);
             }
             catch (InvalidOperationException exception) when (
                 exception.Message.Contains("could not be enforced yet", StringComparison.OrdinalIgnoreCase))
             {
-                // ApplyRuleAsync updates the engine policy before checking whether a live mapping is present.
+                // The engine stores the desired rule before checking for a live device mapping.
             }
         }
-        else
-        {
-            policy.SetRule(macAddress, rule);
-        }
-
-        preferences.PauseInternet = paused;
-        if (deviceIndex.TryGetValue(macAddress, out var device))
-            device.SynchronizePauseInternet(paused);
 
         settingsDirty = true;
         await SaveSettingsIfDirtyAsync();
@@ -2249,7 +2292,17 @@ public partial class MainWindow : Window
         {
             if (ruleChanged || forceApply)
             {
-                await engine.ApplyRuleAsync(device.MacKey, rule);
+                try
+                {
+                    await engine.ApplyRuleAsync(device.MacKey, rule);
+                }
+                catch (InvalidOperationException exception) when (
+                    engine.IsRunning &&
+                    exception.Message.Contains("could not be enforced yet", StringComparison.OrdinalIgnoreCase))
+                {
+                    // ApplyRuleAsync has already stored the rule in the packet policy.
+                    // It will be enforced when a verified live IP/MAC mapping is available.
+                }
             }
 
             preferences.DownloadKiloBytesPerSecond = rule.DownloadKiloBytesPerSecond;
@@ -2317,7 +2370,35 @@ public partial class MainWindow : Window
 
     private void Engine_OnStatusChanged(object? sender, string message)
     {
-        _ = Dispatcher.InvokeAsync(() => DetailStatusText.Text = message);
+        Interlocked.Exchange(ref pendingEngineStatusMessage, message);
+        ScheduleEngineStatusDispatch();
+    }
+
+    private void ScheduleEngineStatusDispatch()
+    {
+        if (Interlocked.Exchange(ref engineStatusDispatchScheduled, 1) != 0)
+        {
+            return;
+        }
+
+        _ = Dispatcher.BeginInvoke(
+            new Action(DrainEngineStatusDispatch),
+            DispatcherPriority.Background);
+    }
+
+    private void DrainEngineStatusDispatch()
+    {
+        var latestMessage = Interlocked.Exchange(ref pendingEngineStatusMessage, null);
+        if (latestMessage is not null)
+        {
+            DetailStatusText.Text = latestMessage;
+        }
+
+        Interlocked.Exchange(ref engineStatusDispatchScheduled, 0);
+        if (Volatile.Read(ref pendingEngineStatusMessage) is not null)
+        {
+            ScheduleEngineStatusDispatch();
+        }
     }
 
     private void Engine_OnIdentityAlertDetected(object? sender, string warning)
