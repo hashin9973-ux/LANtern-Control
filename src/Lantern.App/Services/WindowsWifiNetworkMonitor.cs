@@ -316,9 +316,27 @@ public sealed class WindowsWifiNetworkMonitor
 
     private static bool IsUsableBssid(string value)
     {
-        var hexadecimal = new string(value.Where(Uri.IsHexDigit).ToArray());
-        return hexadecimal.Length == 12 &&
-               hexadecimal.Any(character => character != '0');
+        var octets = value.Split([':', '-'], StringSplitOptions.RemoveEmptyEntries);
+        if (octets.Length != 6)
+        {
+            return false;
+        }
+
+        static bool IsHexPair(string octet)
+        {
+            if (octet.Length != 2)
+            {
+                return false;
+            }
+
+            return octet.All(character =>
+                character is >= '0' and <= '9' or
+                    >= 'a' and <= 'f' or
+                    >= 'A' and <= 'F');
+        }
+
+        return octets.All(IsHexPair) &&
+               octets.Any(octet => !octet.Equals("00", StringComparison.OrdinalIgnoreCase));
     }
 
     private static void TryKill(Process process)
