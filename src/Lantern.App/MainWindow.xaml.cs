@@ -743,9 +743,12 @@ public partial class MainWindow : Window
                 await ApplyNetworkAutomationPauseStateAsync(automation.DeviceMacAddress, matches);
                 automation.HasCapturedPauseState = false;
                 automation.OriginalPauseInternet = false;
-                UpdateNetworkAutomationEvaluationStatus(
-                    automation.Id,
-                    matches ? "Match — device paused" : "No match — device unpaused");
+                var evaluationStatus = string.IsNullOrWhiteSpace(ssid)
+                    ? "No connected Wi-Fi SSID — device unpaused"
+                    : matches
+                        ? $"Match — '{ssid}' contains '{automation.NetworkKeyword}'; device paused"
+                        : $"No match — '{ssid}' does not contain '{automation.NetworkKeyword}'; device unpaused";
+                UpdateNetworkAutomationEvaluationStatus(automation.Id, evaluationStatus);
                 checkedCount++;
                 if (matches) pausedCount++;
                 else unpausedCount++;
