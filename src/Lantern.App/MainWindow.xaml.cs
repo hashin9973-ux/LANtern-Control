@@ -672,8 +672,16 @@ public partial class MainWindow : Window
                 networkAutomationCancellation.Token);
             if (string.IsNullOrWhiteSpace(ssid))
             {
+                foreach (var automation in settings.NetworkKeywordAutomations
+                             .Where(candidate => candidate.Enabled && candidate.HasCapturedPauseState)
+                             .ToArray())
+                {
+                    await RestoreNetworkAutomationPauseStateAsync(automation);
+                }
+
+                await SaveSettingsIfDirtyAsync();
                 NetworkAutomationStatusText.Text =
-                    "No connected Wi-Fi name is available. Network automations are waiting for a connected SSID.";
+                    "No connected Wi-Fi name is available. Any active automation pause was restored.";
                 return;
             }
 
@@ -729,6 +737,13 @@ public partial class MainWindow : Window
         {
             networkAutomationPollInProgress = false;
         }
+    }
+
+    private async Task RestoreActiveNetworkAutomationsAsync()
+    {
+        foreach (var automation in settings.NetworkKeywordAutomations.ToArray())
+            await RestoreNetworkAutomationPauseStateAsync(automation);
+        await SaveSettingsIfDirtyAsync();
     }
 
     private async Task RestoreNetworkAutomationPauseStateAsync(NetworkKeywordAutomation automation)
@@ -2080,6 +2095,9 @@ public partial class MainWindow : Window
         SetStatus("Restoring normal ARP mappings…", null);
         try
         {
+            if (activeNetworkAutomationPollTask is not null)
+                await activeNetworkAutomationPollTask;
+            await RestoreActiveNetworkAutomationsAsync();
             await engine.StopAsync();
             RefreshDevices(null, EventArgs.Empty);
             await SaveSettingsIfDirtyAsync();
@@ -2506,6 +2524,7 @@ public partial class MainWindow : Window
             await deviceAutomationPipeServer.DisposeAsync();
             if (activeNetworkAutomationPollTask is not null)
                 await activeNetworkAutomationPollTask;
+            await RestoreActiveNetworkAutomationsAsync();
             if (activeScriptRunTask is not null)
             {
                 await activeScriptRunTask;

@@ -67,7 +67,7 @@ public sealed class WindowsWifiNetworkMonitor
     {
         ArgumentNullException.ThrowIfNull(output);
         var connected = false;
-        foreach (var line in output.Split(['\\r', '\\n'], StringSplitOptions.RemoveEmptyEntries))
+        foreach (var line in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
         {
             var separator = line.IndexOf(':');
             if (separator <= 0) continue;

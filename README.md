@@ -37,6 +37,7 @@ use case.
 - Pause and restore a device's IPv4 internet connection.
 - Copy a complete, device-specific PowerShell script for focus-free background pause/resume automation.
 - Edit, save, and run PowerShell scripts in the Windows app from the dedicated **Script automation** page, with an optional configurable schedule.
+- Configure Wi-Fi SSID keyword automations that pause a selected device on a match and restore its previous pause setting when the network name no longer matches.
 - Observe domains through DNS queries, TLS server names, and plain HTTP host
   headers without decrypting private HTTPS content.
 - Block domains for individual devices, including presets for common services.
@@ -152,11 +153,12 @@ disconnecting the selected adapter, suspending, or rebooting.
 5. Enter a download or upload limit in `KB/s`. A value of `0` means unlimited.
 6. Use the **Internet** switch to pause or restore a device's connection.
 7. Open **Script automation** from the left sidebar. Use **Open…** to load a `.ps1` file, **Run now** to test it, or explicitly enable a 60–3600 second schedule. The schedule stops when LANtern closes and skips overlapping runs.
-8. Open **Visited domains** to inspect the destination domains LANtern can
+8. Open **Network automation** to add a Wi-Fi SSID keyword for a controllable device. While the connected Wi-Fi name contains the keyword, LANtern pauses that device; when it stops matching, LANtern restores the prior pause setting. Configure polling from 5 to 3600 seconds. This runs only while LANtern is open and Start control is active.
+9. Open **Visited domains** to inspect the destination domains LANtern can
    observe for each device.
-9. Add individual domain rules or use a service preset to block domains for a
+10. Add individual domain rules or use a service preset to block domains for a
    selected device.
-10. Click **Stop & restore** before changing adapters, leaving the network, or
+11. Click **Stop & restore** before changing adapters, leaving the network, or
    shutting down the controller computer.
 
 Settings, saved device identities, and rules are stored locally in:
@@ -296,6 +298,10 @@ helper functions, and Overview navigation/scroll block with the new generated
 SSID matching, and existing `Set-LanternPaused -AutomationId ... -Paused ...`
 calls. The example pause/resume commands in a newly copied template remain
 commented out until you enable the actions you intend to run.
+
+## Network keyword automation
+
+The Windows app can read the currently connected Wi-Fi SSID and compare it with a configured keyword using a case-insensitive substring match. When a match is detected, LANtern pauses the selected device through the existing device-rule application path. When the SSID no longer matches, or the automation is disabled or deleted, LANtern restores the device's pause state captured before the match. One automation can be configured per target device. Polling defaults to 15 seconds and can be configured from 5 to 3600 seconds. It runs only while the application is open and **Start control** is active. Ethernet-only connections do not expose a Wi-Fi SSID for matching.
 
 ## Domain visibility and blocking
 
