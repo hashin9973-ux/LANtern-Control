@@ -15,7 +15,7 @@ public sealed class WindowsWifiNetworkMonitor
 {
     private const uint WlanClientVersion = 2;
     private const int CurrentConnectionOpcode = 7;
-    private const int ConnectedInterfaceState = 1;
+    private const WlanInterfaceState ConnectedInterfaceState = WlanInterfaceState.Connected;
     private const int MaximumEnumeratedInterfaces = 64;
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(4);
 
