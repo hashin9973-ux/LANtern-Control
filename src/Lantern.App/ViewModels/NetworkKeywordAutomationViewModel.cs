@@ -12,6 +12,7 @@ public sealed class NetworkKeywordAutomationViewModel(
 {
     private string deviceName = deviceName;
     private bool isEnabled = isEnabled;
+    private string evaluationStatus = "Waiting for control";
     public event PropertyChangedEventHandler? PropertyChanged;
     public string Id { get; } = id;
     public string DeviceMacAddress { get; } = deviceMacAddress;
@@ -34,7 +35,15 @@ public sealed class NetworkKeywordAutomationViewModel(
     }
 
     public string StatusText => IsEnabled ? "Enabled" : "Disabled";
+
+    public string EvaluationStatus
+    {
+        get => evaluationStatus;
+        private set => SetField(ref evaluationStatus, value);
+    }
+
     public void UpdateDeviceName(string value) => DeviceName = value;
+    public void UpdateEvaluationStatus(string value) => EvaluationStatus = value;
 
     private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
     {
