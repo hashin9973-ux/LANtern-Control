@@ -429,6 +429,10 @@
                                                              Value="Visible">
                                                     <Setter Property="Fill" Value="{StaticResource SecondaryText}" />
                                                 </DataTrigger>
+                                                <DataTrigger Binding="{Binding Visibility, ElementName=NetworkAutomationSection}"
+                                                             Value="Visible">
+                                                    <Setter Property="Fill" Value="{StaticResource SecondaryText}" />
+                                                </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
                                     </Path.Style>
@@ -531,6 +535,39 @@
                                 </Path>
                             </Grid>
                             <TextBlock Text="Script automation" />
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="NetworkAutomationNavButton"
+                            Style="{StaticResource NavButtonStyle}"
+                            Tag="NetworkAutomationSection"
+                            Click="NavigationButton_OnClick"
+                            AutomationProperties.AutomationId="nav_network_automation">
+                        <StackPanel Orientation="Horizontal">
+                            <Grid Width="25" Height="20">
+                                <Path Width="17"
+                                      Height="18"
+                                      HorizontalAlignment="Left"
+                                      VerticalAlignment="Center"
+                                      Data="{StaticResource IconAdapter}"
+                                      StrokeThickness="1.6"
+                                      StrokeStartLineCap="Round"
+                                      StrokeEndLineCap="Round"
+                                      StrokeLineJoin="Round"
+                                      Stretch="Uniform">
+                                    <Path.Style>
+                                        <Style TargetType="Path">
+                                            <Setter Property="Stroke" Value="{StaticResource SecondaryText}" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Visibility, ElementName=NetworkAutomationSection}"
+                                                             Value="Visible">
+                                                    <Setter Property="Stroke" Value="{StaticResource Accent}" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Path.Style>
+                                </Path>
+                            </Grid>
+                            <TextBlock Text="Network automation" />
                         </StackPanel>
                     </Button>
                 </StackPanel>
@@ -2047,6 +2084,156 @@
                                    TextWrapping="Wrap" />
                         <TextBlock Margin="0,6,0,0"
                                    Text="Open, edit, and save .ps1 files here. Run now saves the editor contents before execution. Scheduled runs use the last saved version and stop when LANtern closes. Scripts inherit LANtern’s Windows permissions; only run scripts you understand and trust."
+                                   Foreground="{StaticResource SecondaryText}"
+                                   FontSize="11"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+                <Border x:Name="NetworkAutomationSection"
+                        Margin="0,18,12,24"
+                        Style="{StaticResource CardBorderStyle}"
+                        Visibility="Collapsed">
+                    <StackPanel Margin="20,18">
+                        <TextBlock Text="NETWORK AUTOMATION"
+                                   Foreground="{StaticResource SecondaryText}"
+                                   FontSize="10"
+                                   FontWeight="SemiBold" />
+                        <TextBlock Margin="0,4,0,0"
+                                   Text="Pause a device on a matching Wi-Fi network"
+                                   FontSize="22"
+                                   FontWeight="Bold" />
+                        <TextBlock Margin="0,6,0,0"
+                                   Text="Match a keyword against the connected Wi-Fi name (SSID). While it matches, the target device is paused. When it stops matching, LANtern restores the device's previous pause setting."
+                                   Foreground="{StaticResource SecondaryText}"
+                                   FontSize="12"
+                                   TextWrapping="Wrap" />
+                        <Grid Margin="0,18,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="1.2*" />
+                                <ColumnDefinition Width="1.2*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Margin="0,0,12,0">
+                                <TextBlock Text="TARGET DEVICE"
+                                           Foreground="{StaticResource SecondaryText}"
+                                           FontSize="10"
+                                           FontWeight="SemiBold" />
+                                <ComboBox x:Name="NetworkAutomationDeviceSelector"
+                                          Margin="0,7,0,0"
+                                          Height="36"
+                                          ItemsSource="{Binding Devices}"
+                                          DisplayMemberPath="DisplayName"
+                                          SelectedValuePath="MacKey"
+                                          ToolTip="Choose a discovered device that can be controlled" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Margin="0,0,12,0">
+                                <TextBlock Text="WI-FI NAME KEYWORD"
+                                           Foreground="{StaticResource SecondaryText}"
+                                           FontSize="10"
+                                           FontWeight="SemiBold" />
+                                <TextBox x:Name="NetworkAutomationKeywordTextBox"
+                                         Margin="0,7,0,0"
+                                         Height="36"
+                                         Padding="10,0"
+                                         VerticalContentAlignment="Center"
+                                         Background="{StaticResource InputBackground}"
+                                         Foreground="{StaticResource PrimaryText}"
+                                         BorderBrush="{StaticResource Border}"
+                                         MaxLength="128"
+                                         ToolTip="Pause the target while its connected Wi-Fi name contains this text" />
+                            </StackPanel>
+                            <Button Grid.Column="2"
+                                    Margin="0,20,0,0"
+                                    Style="{StaticResource PrimaryButtonStyle}"
+                                    Click="AddNetworkAutomationButton_OnClick"
+                                    Content="Add automation" />
+                        </Grid>
+                        <Grid Margin="0,16,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="72" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock VerticalAlignment="Center"
+                                       Text="NETWORK SCAN POLL INTERVAL"
+                                       Foreground="{StaticResource SecondaryText}"
+                                       FontSize="10"
+                                       FontWeight="SemiBold" />
+                            <TextBox x:Name="NetworkAutomationPollIntervalTextBox"
+                                     Grid.Column="1"
+                                     Margin="10,0,5,0"
+                                     Height="32"
+                                     Padding="5,0"
+                                     VerticalContentAlignment="Center"
+                                     HorizontalContentAlignment="Center"
+                                     Background="{StaticResource InputBackground}"
+                                     Foreground="{StaticResource PrimaryText}"
+                                     BorderBrush="{StaticResource Border}"
+                                     MaxLength="4"
+                                     Text="15"
+                                     ToolTip="How often to check the connected Wi-Fi name (5–3600 seconds)"
+                                     LostFocus="NetworkAutomationPollIntervalTextBox_OnLostFocus"
+                                     AutomationProperties.AutomationId="network_automation_poll_interval" />
+                            <TextBlock Grid.Column="2"
+                                       VerticalAlignment="Center"
+                                       Text="seconds"
+                                       Foreground="{StaticResource SecondaryText}" />
+                            <TextBlock x:Name="NetworkAutomationStatusText"
+                                       Grid.Column="3"
+                                       Margin="18,0,0,0"
+                                       VerticalAlignment="Center"
+                                       Foreground="{StaticResource SecondaryText}"
+                                       Text="No network automations configured."
+                                       TextWrapping="Wrap" />
+                        </Grid>
+                        <TextBlock Margin="0,22,0,8"
+                                   Text="CONFIGURED AUTOMATIONS"
+                                   Foreground="{StaticResource SecondaryText}"
+                                   FontSize="10"
+                                   FontWeight="SemiBold" />
+                        <ItemsControl ItemsSource="{Binding NetworkKeywordAutomations}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Margin="0,0,0,8"
+                                            Padding="12,10"
+                                            Background="{StaticResource InputBackground}"
+                                            BorderBrush="{StaticResource Border}"
+                                            BorderThickness="1"
+                                            CornerRadius="8">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding DeviceName}"
+                                                           FontWeight="SemiBold" />
+                                                <TextBlock Margin="0,3,0,0"
+                                                           Text="{Binding NetworkKeyword}"
+                                                           Foreground="{StaticResource SecondaryText}"
+                                                           FontSize="11" />
+                                            </StackPanel>
+                                            <CheckBox Grid.Column="1"
+                                                      Margin="12,0,16,0"
+                                                      VerticalAlignment="Center"
+                                                      Content="{Binding StatusText}"
+                                                      IsChecked="{Binding IsEnabled, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                      Click="NetworkAutomationEnabledCheckBox_OnClick" />
+                                            <Button Grid.Column="2"
+                                                    MinHeight="32"
+                                                    Padding="12,5"
+                                                    Tag="{Binding}"
+                                                    Click="DeleteNetworkAutomationButton_OnClick"
+                                                    Content="Delete" />
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Margin="0,8,0,0"
+                                   Text="Automations run only while LANtern is open and Start control is active. A keyword match is case-insensitive and checks the current connected Wi-Fi SSID. Ethernet-only connections do not provide a Wi-Fi name to match."
                                    Foreground="{StaticResource SecondaryText}"
                                    FontSize="11"
                                    TextWrapping="Wrap" />

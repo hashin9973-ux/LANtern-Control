@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -29,6 +30,10 @@ public partial class MainWindow : Window
     private const int MaxWebsiteActivityRows = 250;
     private const int MinimumAutoScanIntervalSeconds = 1;
     private const int MaximumAutoScanIntervalSeconds = 3600;
+    private const int MinimumNetworkAutomationPollIntervalSeconds = 5;
+    private const int MaximumNetworkAutomationPollIntervalSeconds = 3600;
+    private const int MaximumPendingWebsiteActivityEvents = 500;
+    private const int WebsiteActivityEventsPerDrain = 64;
     private const int MinimumScriptIntervalSeconds = 60;
     private const int MaximumScriptIntervalSeconds = 3600;
     private const string DefaultScriptTemplate =
@@ -46,10 +51,12 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer refreshTimer;
     private readonly DispatcherTimer autoScanTimer;
     private readonly DispatcherTimer scriptAutomationTimer;
+    private readonly DispatcherTimer networkAutomationTimer;
     private readonly PowerShellScriptRunner scriptRunner = new();
     private readonly DeviceAutomationPipeServer deviceAutomationPipeServer;
     private readonly CancellationTokenSource scriptRunCancellation = new();
     private Task? activeScriptRunTask;
+    private Task? activeNetworkAutomationPollTask;
     private bool scriptRunInProgress;
     private bool isUpdatingScriptEditor;
     private bool scriptEditorDirty;
@@ -62,12 +69,36 @@ public partial class MainWindow : Window
     private readonly TrafficHistory trafficHistory = new(TrafficSamplingProfile.Capacity, TrafficSamplingProfile.Retention);
     private readonly GitHubUpdateChecker updateChecker = new(UpdateHttpClient);
     private readonly LocalHostDiscoveryService localHostDiscoveryService = new();
+    private readonly WindowsWifiNetworkMonitor wifiNetworkMonitor = new();
+    private readonly CancellationTokenSource networkAutomationCancellation = new();
+    private readonly ConcurrentQueue<DeviceDomainObservedEventArgs> pendingWebsiteActivity = new();
     private PcapLanEngine engine;
     private AppSettings settings = new();
     private DateTimeOffset? controlStartedAt;
-    private bool operationInProgress;
+    private bool startInProgress;
+    private bool scanInProgress;
+    private bool stopInProgress;
+    private bool cacheClearInProgress;
+    private bool networkAutomationPollInProgress;
+    private int pendingWebsiteActivityCount;
+    private int websiteActivityDrainScheduled;
     private bool closeAfterStop;
     private bool settingsDirty;
+
+    private sealed class PendingWebsiteActivity(DeviceDomainObservedEventArgs initial)
+    {
+        public DeviceDomainObservedEventArgs Latest { get; private set; } = initial;
+        public int ObservationCount { get; private set; } = 1;
+        public HashSet<DomainObservationSource> Sources { get; } = [initial.Observation.Source];
+
+        public void Add(DeviceDomainObservedEventArgs observation)
+        {
+            if (observation.ObservedAt >= Latest.ObservedAt)
+                Latest = observation;
+            ObservationCount++;
+            Sources.Add(observation.Observation.Source);
+        }
+    }
 
     public string VersionText =>
         $"v{(typeof(MainWindow).Assembly.GetName().Version ?? new Version()).ToString(3)}";
@@ -100,6 +131,11 @@ public partial class MainWindow : Window
             Interval = TimeSpan.FromSeconds(MinimumScriptIntervalSeconds),
         };
         scriptAutomationTimer.Tick += ScriptAutomationTimer_OnTick;
+        networkAutomationTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(MinimumNetworkAutomationPollIntervalSeconds),
+        };
+        networkAutomationTimer.Tick += NetworkAutomationTimer_OnTick;
         Loaded += MainWindow_OnLoaded;
         Closing += MainWindow_OnClosing;
 
@@ -141,6 +177,8 @@ public partial class MainWindow : Window
     public ObservableCollection<DomainRuleViewModel> DomainRules { get; } = [];
 
     public ObservableCollection<DomainPresetRuleViewModel> DomainPresetRules { get; } = [];
+
+    public ObservableCollection<NetworkKeywordAutomationViewModel> NetworkKeywordAutomations { get; } = [];
 
     public IReadOnlyList<DomainBlockPreset> DomainPresets => DomainBlockPresetCatalog.All;
 
@@ -186,6 +224,9 @@ public partial class MainWindow : Window
         }
 
         LoadDomainRulesFromSettings();
+        NetworkAutomationPollIntervalTextBox.Text = settings.NetworkAutomationPollIntervalSeconds.ToString();
+        LoadNetworkKeywordAutomations();
+        ConfigureNetworkAutomationTimer();
         var adapters = WindowsAdapterService.GetUsableAdapters();
         AdapterSelector.ItemsSource = adapters;
         AdapterSelector.SelectedIndex = adapters.Count > 0 ? 0 : -1;
@@ -255,12 +296,15 @@ public partial class MainWindow : Window
 
     private async void StartButton_OnClick(object sender, RoutedEventArgs eventArgs)
     {
-        if (operationInProgress || AdapterSelector.SelectedItem is not AdapterProfile selected)
+        if (startInProgress ||
+            stopInProgress ||
+            engine.IsRunning ||
+            AdapterSelector.SelectedItem is not AdapterProfile selected)
         {
             return;
         }
 
-        operationInProgress = true;
+        startInProgress = true;
         UpdateButtons();
         SetStatus("Starting packet capture…", null);
         try
@@ -287,7 +331,7 @@ public partial class MainWindow : Window
         }
         finally
         {
-            operationInProgress = false;
+            startInProgress = false;
             UpdateButtons();
         }
     }
@@ -410,7 +454,8 @@ public partial class MainWindow : Window
     private async void AutoScanTimer_OnTick(object? sender, EventArgs eventArgs)
     {
         if (!settings.AutoScanEnabled ||
-            operationInProgress ||
+            scanInProgress ||
+            stopInProgress ||
             AdapterSelector.SelectedItem is not AdapterProfile adapter)
         {
             return;
@@ -419,6 +464,327 @@ public partial class MainWindow : Window
         await RunDeviceScanAsync(adapter, isAutomatic: true);
     }
 
+
+
+    private void LoadNetworkKeywordAutomations()
+    {
+        NetworkKeywordAutomations.Clear();
+        foreach (var automation in settings.NetworkKeywordAutomations)
+        {
+            NetworkKeywordAutomations.Add(new NetworkKeywordAutomationViewModel(
+                automation.Id,
+                automation.DeviceMacAddress,
+                ResolveDeviceName(automation.DeviceMacAddress),
+                automation.NetworkKeyword,
+                automation.Enabled));
+        }
+    }
+
+    private void SyncNetworkAutomationDeviceNames()
+    {
+        foreach (var automation in NetworkKeywordAutomations)
+            automation.UpdateDeviceName(ResolveDeviceName(automation.DeviceMacAddress));
+    }
+
+    private void ConfigureNetworkAutomationTimer()
+    {
+        networkAutomationTimer.Stop();
+        if (!settings.NetworkKeywordAutomations.Any(automation => automation.Enabled))
+            return;
+
+        networkAutomationTimer.Interval = TimeSpan.FromSeconds(Math.Clamp(
+            settings.NetworkAutomationPollIntervalSeconds,
+            MinimumNetworkAutomationPollIntervalSeconds,
+            MaximumNetworkAutomationPollIntervalSeconds));
+        networkAutomationTimer.Start();
+    }
+
+    private async void AddNetworkAutomationButton_OnClick(object sender, RoutedEventArgs eventArgs)
+    {
+        if (NetworkAutomationDeviceSelector.SelectedItem is not DeviceViewModel { CanControl: true } device)
+        {
+            NetworkAutomationStatusText.Text =
+                "Select a controllable device from the device list first. Inventory-only and protected devices cannot be targets.";
+            return;
+        }
+
+        var keyword = NetworkAutomationKeywordTextBox.Text.Trim();
+        if (keyword.Length is 0 or > 128)
+        {
+            NetworkAutomationStatusText.Text = "Enter a network name keyword (1–128 characters).";
+            return;
+        }
+
+        if (settings.NetworkKeywordAutomations.Any(automation =>
+                automation.DeviceMacAddress.Equals(device.MacKey, StringComparison.OrdinalIgnoreCase)))
+        {
+            NetworkAutomationStatusText.Text =
+                "This device already has a network automation. Delete it before adding a different keyword.";
+            return;
+        }
+
+        var automation = new NetworkKeywordAutomation
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            DeviceMacAddress = device.MacKey,
+            NetworkKeyword = keyword,
+            Enabled = true,
+        };
+        settings.NetworkKeywordAutomations.Add(automation);
+        var viewModel = new NetworkKeywordAutomationViewModel(
+            automation.Id, automation.DeviceMacAddress, device.DisplayName, keyword, true);
+        NetworkKeywordAutomations.Add(viewModel);
+
+        try
+        {
+            await settingsStore.SaveAsync(settings);
+            settingsDirty = false;
+            NetworkAutomationKeywordTextBox.Clear();
+            NetworkAutomationStatusText.Text =
+                $"Added for {device.DisplayName}. A matching Wi-Fi name pauses this device; leaving the match restores its previous pause setting.";
+            ConfigureNetworkAutomationTimer();
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            settings.NetworkKeywordAutomations.Remove(automation);
+            NetworkKeywordAutomations.Remove(viewModel);
+            NetworkAutomationStatusText.Text = $"Could not save the automation: {exception.Message}";
+        }
+    }
+
+    private async void NetworkAutomationEnabledCheckBox_OnClick(object sender, RoutedEventArgs eventArgs)
+    {
+        if (sender is not CheckBox { DataContext: NetworkKeywordAutomationViewModel viewModel })
+            return;
+
+        var automation = settings.NetworkKeywordAutomations.FirstOrDefault(candidate =>
+            candidate.Id.Equals(viewModel.Id, StringComparison.OrdinalIgnoreCase));
+        if (automation is null) return;
+
+        automation.Enabled = viewModel.IsEnabled;
+        try
+        {
+            if (!automation.Enabled)
+                await RestoreNetworkAutomationPauseStateAsync(automation);
+
+            await settingsStore.SaveAsync(settings);
+            settingsDirty = false;
+            NetworkAutomationStatusText.Text = automation.Enabled
+                ? $"Automation enabled for {viewModel.DeviceName}."
+                : $"Automation disabled for {viewModel.DeviceName}; its previous pause state was restored.";
+            ConfigureNetworkAutomationTimer();
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            viewModel.IsEnabled = !automation.Enabled;
+            automation.Enabled = viewModel.IsEnabled;
+            NetworkAutomationStatusText.Text = $"Could not update the automation: {exception.Message}";
+        }
+    }
+
+    private async void DeleteNetworkAutomationButton_OnClick(object sender, RoutedEventArgs eventArgs)
+    {
+        if (sender is not Button { Tag: NetworkKeywordAutomationViewModel viewModel })
+            return;
+
+        var automation = settings.NetworkKeywordAutomations.FirstOrDefault(candidate =>
+            candidate.Id.Equals(viewModel.Id, StringComparison.OrdinalIgnoreCase));
+        if (automation is null) return;
+
+        try
+        {
+            await RestoreNetworkAutomationPauseStateAsync(automation);
+            settings.NetworkKeywordAutomations.Remove(automation);
+            NetworkKeywordAutomations.Remove(viewModel);
+            await settingsStore.SaveAsync(settings);
+            settingsDirty = false;
+            NetworkAutomationStatusText.Text =
+                $"Deleted the automation for {viewModel.DeviceName} and restored its previous pause setting.";
+            ConfigureNetworkAutomationTimer();
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            NetworkAutomationStatusText.Text = $"Could not delete the automation: {exception.Message}";
+        }
+    }
+
+    private async void NetworkAutomationPollIntervalTextBox_OnLostFocus(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        if (!int.TryParse(NetworkAutomationPollIntervalTextBox.Text.Trim(), out var intervalSeconds) ||
+            intervalSeconds is < MinimumNetworkAutomationPollIntervalSeconds or > MaximumNetworkAutomationPollIntervalSeconds)
+        {
+            NetworkAutomationPollIntervalTextBox.Text =
+                settings.NetworkAutomationPollIntervalSeconds.ToString();
+            NetworkAutomationStatusText.Text =
+                $"Poll interval must be between {MinimumNetworkAutomationPollIntervalSeconds} and {MaximumNetworkAutomationPollIntervalSeconds} seconds.";
+            return;
+        }
+
+        if (settings.NetworkAutomationPollIntervalSeconds == intervalSeconds) return;
+
+        var previous = settings.NetworkAutomationPollIntervalSeconds;
+        settings.NetworkAutomationPollIntervalSeconds = intervalSeconds;
+        try
+        {
+            await settingsStore.SaveAsync(settings);
+            settingsDirty = false;
+            ConfigureNetworkAutomationTimer();
+            NetworkAutomationStatusText.Text =
+                $"Network automation checks every {intervalSeconds} seconds.";
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            settings.NetworkAutomationPollIntervalSeconds = previous;
+            NetworkAutomationPollIntervalTextBox.Text = previous.ToString();
+            NetworkAutomationStatusText.Text = $"Could not save poll interval: {exception.Message}";
+        }
+    }
+
+    private void NetworkAutomationTimer_OnTick(object? sender, EventArgs eventArgs)
+    {
+        if (networkAutomationPollInProgress ||
+            !settings.NetworkKeywordAutomations.Any(automation => automation.Enabled))
+            return;
+
+        networkAutomationPollInProgress = true;
+        activeNetworkAutomationPollTask = PollNetworkKeywordAutomationsAsync();
+    }
+
+    private async Task PollNetworkKeywordAutomationsAsync()
+    {
+        await Task.Yield();
+        try
+        {
+            if (!engine.IsRunning)
+            {
+                NetworkAutomationStatusText.Text =
+                    "Automations are enabled and waiting for Start control.";
+                return;
+            }
+
+            var ssid = await wifiNetworkMonitor.GetCurrentSsidAsync(
+                networkAutomationCancellation.Token);
+            if (string.IsNullOrWhiteSpace(ssid))
+            {
+                NetworkAutomationStatusText.Text =
+                    "No connected Wi-Fi name is available. Network automations are waiting for a connected SSID.";
+                return;
+            }
+
+            var changed = false;
+            foreach (var automation in settings.NetworkKeywordAutomations
+                         .Where(candidate => candidate.Enabled)
+                         .ToArray())
+            {
+                networkAutomationCancellation.Token.ThrowIfCancellationRequested();
+                var preferences = GetOrCreateDevicePreferences(automation.DeviceMacAddress);
+                var matches = ssid.Contains(automation.NetworkKeyword, StringComparison.OrdinalIgnoreCase);
+                if (matches)
+                {
+                    if (!automation.HasCapturedPauseState)
+                    {
+                        automation.OriginalPauseInternet = preferences.PauseInternet;
+                        automation.HasCapturedPauseState = true;
+                        settingsDirty = true;
+                        changed = true;
+                    }
+
+                    if (!preferences.PauseInternet)
+                    {
+                        await ApplyNetworkAutomationPauseStateAsync(automation.DeviceMacAddress, paused: true);
+                        changed = true;
+                    }
+                }
+                else if (automation.HasCapturedPauseState)
+                {
+                    await ApplyNetworkAutomationPauseStateAsync(
+                        automation.DeviceMacAddress,
+                        automation.OriginalPauseInternet);
+                    automation.HasCapturedPauseState = false;
+                    automation.OriginalPauseInternet = false;
+                    settingsDirty = true;
+                    changed = true;
+                }
+            }
+
+            if (changed) await SaveSettingsIfDirtyAsync();
+            NetworkAutomationStatusText.Text =
+                $"Connected Wi-Fi: {ssid}. Checked {settings.NetworkKeywordAutomations.Count(item => item.Enabled)} enabled automation(s).";
+        }
+        catch (OperationCanceledException) when (networkAutomationCancellation.IsCancellationRequested)
+        {
+            // Expected during window shutdown.
+        }
+        catch (Exception exception)
+        {
+            NetworkAutomationStatusText.Text = $"Network automation check failed: {exception.Message}";
+        }
+        finally
+        {
+            networkAutomationPollInProgress = false;
+        }
+    }
+
+    private async Task RestoreNetworkAutomationPauseStateAsync(NetworkKeywordAutomation automation)
+    {
+        if (!automation.HasCapturedPauseState) return;
+        await ApplyNetworkAutomationPauseStateAsync(
+            automation.DeviceMacAddress,
+            automation.OriginalPauseInternet);
+        automation.HasCapturedPauseState = false;
+        automation.OriginalPauseInternet = false;
+        settingsDirty = true;
+    }
+
+    private async Task ApplyNetworkAutomationPauseStateAsync(string macAddress, bool paused)
+    {
+        var preferences = GetOrCreateDevicePreferences(macAddress);
+        var rule = new TrafficRule(
+                paused,
+                preferences.DownloadKiloBytesPerSecond,
+                preferences.UploadKiloBytesPerSecond)
+            .ForForwardingMode();
+
+        if (engine.IsRunning)
+        {
+            try
+            {
+                await engine.ApplyRuleAsync(macAddress, rule);
+            }
+            catch (InvalidOperationException exception) when (
+                exception.Message.Contains("could not be enforced yet", StringComparison.OrdinalIgnoreCase))
+            {
+                // ApplyRuleAsync updates the engine policy before checking whether a live mapping is present.
+            }
+        }
+        else
+        {
+            policy.SetRule(macAddress, rule);
+        }
+
+        preferences.PauseInternet = paused;
+        if (deviceIndex.TryGetValue(macAddress, out var device))
+            device.SynchronizePauseInternet(paused);
+
+        settingsDirty = true;
+        await SaveSettingsIfDirtyAsync();
+    }
+
+    private DevicePreferences GetOrCreateDevicePreferences(string macAddress)
+    {
+        if (settings.Devices.TryGetValue(macAddress, out var preferences))
+            return preferences;
+
+        preferences = new DevicePreferences();
+        settings.Devices[macAddress] = preferences;
+        return preferences;
+    }
 
     private async void BrowseScriptButton_OnClick(object sender, RoutedEventArgs eventArgs)
     {
@@ -950,12 +1316,12 @@ public partial class MainWindow : Window
 
     private async Task RunDeviceScanAsync(AdapterProfile adapter, bool isAutomatic)
     {
-        if (operationInProgress)
+        if (scanInProgress || stopInProgress)
         {
             return;
         }
 
-        operationInProgress = true;
+        scanInProgress = true;
         UpdateButtons();
         try
         {
@@ -1081,7 +1447,7 @@ public partial class MainWindow : Window
         }
         finally
         {
-            operationInProgress = false;
+            scanInProgress = false;
             UpdateButtons();
         }
     }
@@ -1090,7 +1456,11 @@ public partial class MainWindow : Window
         object sender,
         RoutedEventArgs eventArgs)
     {
-        if (operationInProgress)
+        if (cacheClearInProgress ||
+            engine.IsRunning ||
+            scanInProgress ||
+            startInProgress ||
+            stopInProgress)
         {
             return;
         }
@@ -1104,7 +1474,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        operationInProgress = true;
+        cacheClearInProgress = true;
         UpdateButtons();
         try
         {
@@ -1166,7 +1536,7 @@ public partial class MainWindow : Window
         }
         finally
         {
-            operationInProgress = false;
+            cacheClearInProgress = false;
             UpdateButtons();
         }
     }
@@ -1179,6 +1549,8 @@ public partial class MainWindow : Window
 
     private void ClearObservedActivity()
     {
+        while (pendingWebsiteActivity.TryDequeue(out _))
+            Interlocked.Decrement(ref pendingWebsiteActivityCount);
         websiteActivityIndex.Clear();
         WebsiteActivity.Clear();
         websiteActivityGroupIndex.Clear();
@@ -1190,12 +1562,68 @@ public partial class MainWindow : Window
         object? sender,
         DeviceDomainObservedEventArgs eventArgs)
     {
-        _ = Dispatcher.BeginInvoke(
-            () => ObserveWebsiteActivity(eventArgs),
-            DispatcherPriority.Background);
+        var pendingCount = Interlocked.Increment(ref pendingWebsiteActivityCount);
+        pendingWebsiteActivity.Enqueue(eventArgs);
+        while (pendingCount > MaximumPendingWebsiteActivityEvents &&
+               pendingWebsiteActivity.TryDequeue(out _))
+        {
+            pendingCount = Interlocked.Decrement(ref pendingWebsiteActivityCount);
+        }
+
+        ScheduleWebsiteActivityDrain();
     }
 
-    private void ObserveWebsiteActivity(DeviceDomainObservedEventArgs eventArgs)
+    private void ScheduleWebsiteActivityDrain()
+    {
+        if (Interlocked.Exchange(ref websiteActivityDrainScheduled, 1) == 0)
+        {
+            _ = Dispatcher.BeginInvoke(
+                DrainWebsiteActivity,
+                DispatcherPriority.Background);
+        }
+    }
+
+    private void DrainWebsiteActivity()
+    {
+        var aggregates = new Dictionary<string, PendingWebsiteActivity>(
+            StringComparer.OrdinalIgnoreCase);
+        for (var index = 0;
+             index < WebsiteActivityEventsPerDrain &&
+             pendingWebsiteActivity.TryDequeue(out var observation);
+             index++)
+        {
+            Interlocked.Decrement(ref pendingWebsiteActivityCount);
+            var macKey = TrafficPolicy.NormalizeMac(observation.MacAddress.ToString());
+            var key = $"{macKey}|{observation.Observation.Domain}";
+            if (aggregates.TryGetValue(key, out var aggregate))
+                aggregate.Add(observation);
+            else
+                aggregates.Add(key, new PendingWebsiteActivity(observation));
+        }
+
+        foreach (var aggregate in aggregates.Values)
+        {
+            ObserveWebsiteActivity(
+                aggregate.Latest,
+                aggregate.ObservationCount,
+                aggregate.Sources);
+        }
+
+        if (aggregates.Count > 0)
+        {
+            CollectionViewSource.GetDefaultView(WebsiteActivity).Refresh();
+            RefreshWebsiteActivityState();
+        }
+
+        Interlocked.Exchange(ref websiteActivityDrainScheduled, 0);
+        if (!pendingWebsiteActivity.IsEmpty)
+            ScheduleWebsiteActivityDrain();
+    }
+
+    private void ObserveWebsiteActivity(
+        DeviceDomainObservedEventArgs eventArgs,
+        int observationCount,
+        IReadOnlyCollection<DomainObservationSource> sources)
     {
         var macKey = TrafficPolicy.NormalizeMac(eventArgs.MacAddress.ToString());
         var deviceName = deviceIndex.TryGetValue(macKey, out var device)
@@ -1210,7 +1638,9 @@ public partial class MainWindow : Window
                 deviceName,
                 ipAddress,
                 eventArgs.Observation.Source,
-                eventArgs.ObservedAt);
+                eventArgs.ObservedAt,
+                sources,
+                observationCount);
             existing.SetBlocked(
                 eventArgs.Blocked || policy.ShouldBlockDomain(macKey, existing.Domain));
             group.TouchDomain(existing);
@@ -1223,7 +1653,9 @@ public partial class MainWindow : Window
                 ipAddress,
                 eventArgs.Observation.Domain,
                 eventArgs.Observation.Source,
-                eventArgs.ObservedAt);
+                eventArgs.ObservedAt,
+                sources,
+                observationCount);
             activity.SetBlocked(
                 eventArgs.Blocked || policy.ShouldBlockDomain(macKey, activity.Domain));
             websiteActivityIndex[domainKey] = activity;
@@ -1247,8 +1679,6 @@ public partial class MainWindow : Window
             }
         }
 
-        CollectionViewSource.GetDefaultView(WebsiteActivity).Refresh();
-        RefreshWebsiteActivityState();
     }
 
     private async void BlockVisitedDomainButton_OnClick(
@@ -1641,12 +2071,10 @@ public partial class MainWindow : Window
 
     private async Task StopEngineAsync()
     {
-        if (operationInProgress)
-        {
+        if (stopInProgress || startInProgress || !engine.IsRunning)
             return;
-        }
 
-        operationInProgress = true;
+        stopInProgress = true;
         refreshTimer.Stop();
         UpdateButtons();
         SetStatus("Restoring normal ARP mappings…", null);
@@ -1661,7 +2089,7 @@ public partial class MainWindow : Window
         }
         finally
         {
-            operationInProgress = false;
+            stopInProgress = false;
             UpdateButtons();
         }
     }
@@ -1768,6 +2196,7 @@ public partial class MainWindow : Window
 
         SyncWebsiteActivityGroups();
         SyncDomainRuleDevices();
+        SyncNetworkAutomationDeviceNames();
         RefreshDashboardSummary();
         RefreshEngineHealthDisplay();
         EmptyState.Visibility = Devices.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -2048,6 +2477,8 @@ public partial class MainWindow : Window
     {
         autoScanTimer.Stop();
         scriptAutomationTimer.Stop();
+        networkAutomationTimer.Stop();
+        networkAutomationCancellation.Cancel();
         scriptRunCancellation.Cancel();
         if (closeAfterStop)
         {
@@ -2058,7 +2489,8 @@ public partial class MainWindow : Window
         // this close normally instead of cancelling and recursively closing it.
         if (!deviceAutomationPipeServer.IsStarted &&
             !engine.IsRunning &&
-            activeScriptRunTask is null)
+            activeScriptRunTask is null &&
+            activeNetworkAutomationPollTask is null)
         {
             deviceAutomationPipeServer.DisposeAsync().GetAwaiter().GetResult();
             closeAfterStop = true;
@@ -2072,6 +2504,8 @@ public partial class MainWindow : Window
         try
         {
             await deviceAutomationPipeServer.DisposeAsync();
+            if (activeNetworkAutomationPollTask is not null)
+                await activeNetworkAutomationPollTask;
             if (activeScriptRunTask is not null)
             {
                 await activeScriptRunTask;
@@ -2093,17 +2527,27 @@ public partial class MainWindow : Window
 
     private void UpdateButtons()
     {
-        StartButton.IsEnabled = !operationInProgress &&
-                                !engine.IsRunning &&
-                                AdapterSelector.SelectedItem is AdapterProfile;
-        StopButton.IsEnabled = !operationInProgress && engine.IsRunning;
         var hasAdapter = AdapterSelector.SelectedItem is AdapterProfile;
-        ScanButton.IsEnabled = !operationInProgress && hasAdapter;
-        AutoScanCheckBox.IsEnabled = !operationInProgress && hasAdapter;
-        AutoScanIntervalTextBox.IsEnabled = !operationInProgress && hasAdapter;
+        StartButton.IsEnabled = hasAdapter &&
+                                !engine.IsRunning &&
+                                !startInProgress &&
+                                !stopInProgress;
+        StopButton.IsEnabled = engine.IsRunning &&
+                               !startInProgress &&
+                               !stopInProgress;
+        ScanButton.IsEnabled = hasAdapter && !scanInProgress && !stopInProgress;
+        AutoScanCheckBox.IsEnabled = hasAdapter && !startInProgress && !stopInProgress;
+        AutoScanIntervalTextBox.IsEnabled = hasAdapter && !startInProgress && !stopInProgress;
         UpdateScriptAutomationControls();
-        ClearDeviceCacheButton.IsEnabled = !operationInProgress;
-        AdapterSelector.IsEnabled = !operationInProgress && !engine.IsRunning;
+        ClearDeviceCacheButton.IsEnabled = !cacheClearInProgress &&
+                                          !engine.IsRunning &&
+                                          !scanInProgress &&
+                                          !startInProgress &&
+                                          !stopInProgress;
+        AdapterSelector.IsEnabled = !engine.IsRunning &&
+                                    !scanInProgress &&
+                                    !startInProgress &&
+                                    !stopInProgress;
         StartButton.Visibility = engine.IsRunning ? Visibility.Collapsed : Visibility.Visible;
         ScanButton.Visibility = AdapterSelector.SelectedItem is AdapterProfile
             ? Visibility.Visible
@@ -2165,6 +2609,9 @@ public partial class MainWindow : Window
             ? Visibility.Visible
             : Visibility.Collapsed;
         ScriptAutomationSection.Visibility = target == ScriptAutomationSection
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        NetworkAutomationSection.Visibility = target == NetworkAutomationSection
             ? Visibility.Visible
             : Visibility.Collapsed;
     }
