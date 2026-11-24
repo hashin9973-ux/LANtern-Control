@@ -73,6 +73,7 @@ public sealed class WindowsWifiNetworkMonitor
                     interfaceList,
                     firstInterfaceOffset + (index * interfaceSize));
                 var wlanInterface = Marshal.PtrToStructure<WlanInterfaceInfo>(interfacePointer);
+                _ = wlanInterface.InterfaceDescription;
                 if (wlanInterface.State != ConnectedInterfaceState)
                 {
                     continue;
@@ -95,6 +96,12 @@ public sealed class WindowsWifiNetworkMonitor
                     }
 
                     var connection = Marshal.PtrToStructure<WlanConnectionAttributes>(connectionData);
+                    _ = connection.ProfileName;
+                    _ = connection.AssociationAttributes.Bssid;
+                    _ = connection.SecurityAttributes.SecurityEnabled;
+                    _ = connection.SecurityAttributes.OneXEnabled;
+                    _ = connection.SecurityAttributes.AuthenticationAlgorithm;
+                    _ = connection.SecurityAttributes.CipherAlgorithm;
                     if (connection.State != ConnectedInterfaceState)
                     {
                         continue;
@@ -390,6 +397,7 @@ public sealed class WindowsWifiNetworkMonitor
     }
 
     [DllImport("wlanapi.dll", ExactSpelling = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     private static extern uint WlanOpenHandle(
         uint clientVersion,
         IntPtr reserved,
