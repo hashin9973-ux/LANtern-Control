@@ -186,6 +186,7 @@ public sealed class DeviceViewModelTests
                         "ActivityNavButton",
                         "DomainRulesNavButton",
                         "ScriptAutomationNavButton",
+                        "NetworkAutomationNavButton",
                         "AdapterStrip",
                         "MetricsPanel",
                         "ConnectedDevicesMetric",
@@ -197,6 +198,11 @@ public sealed class DeviceViewModelTests
                         "WebsiteActivityDeviceList",
                         "ClearActivityButton",
                         "DomainRulesSection",
+                        "NetworkAutomationSection",
+                        "NetworkAutomationDeviceSelector",
+                        "NetworkAutomationKeywordTextBox",
+                        "NetworkAutomationPollIntervalTextBox",
+                        "NetworkAutomationStatusText",
                         "DomainPresetDeviceSelector",
                         "DomainPresetSelector",
                         "ApplyDomainPresetButton",
@@ -294,10 +300,13 @@ public sealed class DeviceViewModelTests
                         window.FindName("DomainRulesSection"));
                     var scriptAutomationSection = Assert.IsType<Border>(
                         window.FindName("ScriptAutomationSection"));
+                    var networkAutomationSection = Assert.IsType<Border>(
+                        window.FindName("NetworkAutomationSection"));
                     Assert.Equal(Visibility.Visible, overviewSection.Visibility);
                     Assert.Equal(Visibility.Collapsed, websiteSection.Visibility);
                     Assert.Equal(Visibility.Collapsed, domainRulesSection.Visibility);
                     Assert.Equal(Visibility.Collapsed, scriptAutomationSection.Visibility);
+                    Assert.Equal(Visibility.Collapsed, networkAutomationSection.Visibility);
 
                     var activityNav = Assert.IsType<Button>(window.FindName("ActivityNavButton"));
                     activityNav.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -324,6 +333,12 @@ public sealed class DeviceViewModelTests
                     Assert.Equal(Visibility.Collapsed, websiteSection.Visibility);
                     Assert.Equal(Visibility.Collapsed, domainRulesSection.Visibility);
                     Assert.Equal(Visibility.Visible, scriptAutomationSection.Visibility);
+                    var networkAutomationNav = Assert.IsType<Button>(
+                        window.FindName("NetworkAutomationNavButton"));
+                    networkAutomationNav.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    Assert.Equal(Visibility.Collapsed, overviewSection.Visibility);
+                    Assert.Equal(Visibility.Visible, networkAutomationSection.Visibility);
+                    Assert.NotNull(window.FindName("NetworkAutomationPollIntervalTextBox"));
 
                     var presetSelector = Assert.IsType<ComboBox>(
                         window.FindName("DomainPresetSelector"));
