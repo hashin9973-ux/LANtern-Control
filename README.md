@@ -301,7 +301,7 @@ commented out until you enable the actions you intend to run.
 
 ## Network keyword automation
 
-The Windows app can read the currently connected Wi-Fi SSID and compare it with a configured keyword using a case-insensitive substring match. When a match is detected, LANtern pauses the selected device through the existing device-rule application path. When the SSID does not match or is unavailable, or the automation is disabled, deleted, or Start control stops, LANtern unpauses the target device. Network automations never pause devices while control is stopped. One automation can be configured per target device. Polling defaults to 15 seconds and can be configured from 5 to 3600 seconds. It runs only while the application is open and **Start control** is active. Ethernet-only connections do not expose a Wi-Fi SSID for matching.
+The Windows app reads the currently connected Wi-Fi SSID through the Windows Native Wi-Fi API (with a `netsh` fallback) and compares it with a configured keyword using a case-insensitive substring match. The native API avoids relying on localized `netsh` state labels. When a match is detected, LANtern pauses the selected device through the existing device-rule application path. When the SSID does not match or is unavailable, or the automation is disabled, deleted, or Start control stops, LANtern unpauses the target device. Network automations never pause devices while control is stopped. One automation can be configured per target device. Polling defaults to 15 seconds and can be configured from 5 to 3600 seconds. It runs only while the application is open and **Start control** is active. Ethernet-only connections do not expose a Wi-Fi SSID for matching.
 
 ## Domain visibility and blocking
 
