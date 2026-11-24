@@ -382,6 +382,12 @@ public sealed class DeviceViewModelTests
                         "The traffic chart must clip strokes and markers inside its own drawing surface.");
                     var deviceGrid = Assert.IsType<DataGrid>(window.FindName("DeviceGrid"));
                     Assert.Equal(68, deviceGrid.RowHeight);
+                    var internetColumn = Assert.IsType<DataGridTemplateColumn>(
+                        Assert.Single(deviceGrid.Columns, candidate => Equals(candidate.Header, "INTERNET")));
+                    var pauseCheckBox = Assert.IsType<CheckBox>(internetColumn.CellTemplate!.LoadContent());
+                    var pauseBinding = Assert.IsType<Binding>(
+                        BindingOperations.GetBinding(pauseCheckBox, ToggleButton.IsCheckedProperty));
+                    Assert.Equal(nameof(DeviceViewModel.PauseInternet), pauseBinding.Path.Path);
                     var deviceColumn = Assert.IsType<DataGridTemplateColumn>(deviceGrid.Columns[0]);
                     var deviceIdentity = Assert.IsType<Grid>(deviceColumn.CellTemplate!.LoadContent());
                     Assert.Equal(new GridLength(36), deviceIdentity.ColumnDefinitions[0].Width);
