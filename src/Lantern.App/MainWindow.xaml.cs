@@ -583,6 +583,11 @@ public partial class MainWindow : Window
         {
             if (!automation.Enabled)
             {
+                if (activeNetworkAutomationPollTask is not null)
+                {
+                    await activeNetworkAutomationPollTask;
+                }
+
                 await ApplyNetworkAutomationPauseStateAsync(automation.DeviceMacAddress, paused: false);
                 automation.HasCapturedPauseState = false;
                 automation.OriginalPauseInternet = false;
@@ -625,6 +630,11 @@ public partial class MainWindow : Window
 
         try
         {
+            if (activeNetworkAutomationPollTask is not null)
+            {
+                await activeNetworkAutomationPollTask;
+            }
+
             await ApplyNetworkAutomationPauseStateAsync(automation.DeviceMacAddress, paused: false);
             automation.HasCapturedPauseState = false;
             automation.OriginalPauseInternet = false;
