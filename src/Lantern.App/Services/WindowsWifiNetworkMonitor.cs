@@ -238,15 +238,19 @@ public sealed class WindowsWifiNetworkMonitor
         var stateSaysDisconnected = false;
         var hasAssociatedBssid = false;
 
-        string? CompleteInterface()
+        string? FinishCurrentInterface()
         {
-            return !string.IsNullOrWhiteSpace(candidateSsid) &&
-                   (stateSaysConnected || (!stateSaysDisconnected && hasAssociatedBssid))
+            if (string.IsNullOrWhiteSpace(candidateSsid))
+            {
+                return null;
+            }
+
+            return stateSaysConnected || (!stateSaysDisconnected && hasAssociatedBssid)
                 ? candidateSsid
                 : null;
         }
 
-        void ResetInterface()
+        void ResetCurrentInterface()
         {
             candidateSsid = null;
             stateSaysConnected = false;
@@ -254,41 +258,48 @@ public sealed class WindowsWifiNetworkMonitor
             hasAssociatedBssid = false;
         }
 
-        foreach (var line in output.Split(['\r', '\n']))
+        foreach (var line in output.Split(['\\r', '\\n']))
         {
             if (string.IsNullOrWhiteSpace(line))
             {
-                var completed = CompleteInterface();
-                if (completed is not null)
+                // Some localized netsh versions omit a recognizable interface-name
+                // label. A completed SSID block is still separated by a blank line.
+                if (candidateSsid is not null)
                 {
-                    return completed;
+                    var completed = FinishCurrentInterface();
+                    if (completed is not null)
+                    {
+                        return completed;
+                    }
+
+                    ResetCurrentInterface();
                 }
 
-                ResetInterface();
                 continue;
             }
 
             var separator = line.IndexOf(':');
-            if (separator <= 0) continue;
+            if (separator <= 0)
+            {
+                continue;
+            }
+
             var key = line[..separator].Trim();
             var value = line[(separator + 1)..].Trim();
-
             if (key.Equals("Name", StringComparison.OrdinalIgnoreCase))
             {
-                var completed = CompleteInterface();
+                var completed = FinishCurrentInterface();
                 if (completed is not null)
                 {
                     return completed;
                 }
 
-                ResetInterface();
+                ResetCurrentInterface();
             }
             else if (key.Equals("State", StringComparison.OrdinalIgnoreCase))
             {
-                stateSaysConnected =
-                    value.Equals("connected", StringComparison.OrdinalIgnoreCase);
-                stateSaysDisconnected =
-                    value.Equals("disconnected", StringComparison.OrdinalIgnoreCase);
+                stateSaysConnected = value.Equals("connected", StringComparison.OrdinalIgnoreCase);
+                stateSaysDisconnected = value.Equals("disconnected", StringComparison.OrdinalIgnoreCase);
             }
             else if (key.Equals("SSID", StringComparison.OrdinalIgnoreCase))
             {
@@ -300,7 +311,7 @@ public sealed class WindowsWifiNetworkMonitor
             }
         }
 
-        return CompleteInterface();
+        return FinishCurrentInterface();
     }
 
     private static bool IsUsableBssid(string value)
