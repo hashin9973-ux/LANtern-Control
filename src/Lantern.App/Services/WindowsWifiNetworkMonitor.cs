@@ -316,27 +316,19 @@ public sealed class WindowsWifiNetworkMonitor
 
     private static bool IsUsableBssid(string value)
     {
-        var octets = value.Split([':', '-'], StringSplitOptions.RemoveEmptyEntries);
-        if (octets.Length != 6)
+        // Validate the address without relying on Split overload resolution.
+        // netsh emits six two-digit octets separated by either ':' or '-'.
+        var hexDigits = new string(value.Where(Uri.IsHexDigit).ToArray());
+        if (hexDigits.Length != 12 ||
+            value.Any(character =>
+                !Uri.IsHexDigit(character) &&
+                character is not ':' and not '-' &&
+                !char.IsWhiteSpace(character)))
         {
             return false;
         }
 
-        static bool IsHexPair(string octet)
-        {
-            if (octet.Length != 2)
-            {
-                return false;
-            }
-
-            return octet.All(character =>
-                character is >= '0' and <= '9' or
-                    >= 'a' and <= 'f' or
-                    >= 'A' and <= 'F');
-        }
-
-        return octets.All(IsHexPair) &&
-               octets.Any(octet => !octet.Equals("00", StringComparison.OrdinalIgnoreCase));
+        return hexDigits.Any(character => character != '0');
     }
 
     private static void TryKill(Process process)
