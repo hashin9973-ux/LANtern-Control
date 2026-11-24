@@ -760,6 +760,8 @@ public partial class MainWindow : Window
         }
         catch (Exception exception)
         {
+            var failureStatus =
+                $"Network automation check failed: {exception.Message}. Unpause was attempted for enabled targets.";
             foreach (var automation in settings.NetworkKeywordAutomations
                          .Where(candidate => candidate.Enabled)
                          .ToArray())
@@ -778,16 +780,12 @@ public partial class MainWindow : Window
                     UpdateNetworkAutomationEvaluationStatus(
                         automation.Id,
                         "Wi-Fi check and unpause failed");
-                    NetworkAutomationStatusText.Text =
-                        $"Wi-Fi check failed: {exception.Message}. Could not unpause {automation.DeviceMacAddress}: {restoreException.Message}";
+                    failureStatus +=
+                        $" Could not unpause {automation.DeviceMacAddress}: {restoreException.Message}";
                 }
             }
 
-            if (string.IsNullOrWhiteSpace(NetworkAutomationStatusText.Text))
-            {
-                NetworkAutomationStatusText.Text =
-                    $"Network automation check failed: {exception.Message}. Unpause was attempted for enabled targets.";
-            }
+            NetworkAutomationStatusText.Text = failureStatus;
         }
         finally
         {
