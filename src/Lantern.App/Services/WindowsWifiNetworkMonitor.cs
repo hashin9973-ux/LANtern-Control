@@ -228,12 +228,13 @@ public sealed class WindowsWifiNetworkMonitor
 
         string? candidateSsid = null;
         var stateSaysConnected = false;
+        var stateSaysDisconnected = false;
         var hasAssociatedBssid = false;
 
         string? CompleteInterface()
         {
             return !string.IsNullOrWhiteSpace(candidateSsid) &&
-                   (stateSaysConnected || hasAssociatedBssid)
+                   (stateSaysConnected || (!stateSaysDisconnected && hasAssociatedBssid))
                 ? candidateSsid
                 : null;
         }
@@ -242,6 +243,7 @@ public sealed class WindowsWifiNetworkMonitor
         {
             candidateSsid = null;
             stateSaysConnected = false;
+            stateSaysDisconnected = false;
             hasAssociatedBssid = false;
         }
 
@@ -278,6 +280,8 @@ public sealed class WindowsWifiNetworkMonitor
             {
                 stateSaysConnected =
                     value.Equals("connected", StringComparison.OrdinalIgnoreCase);
+                stateSaysDisconnected =
+                    value.Equals("disconnected", StringComparison.OrdinalIgnoreCase);
             }
             else if (key.Equals("SSID", StringComparison.OrdinalIgnoreCase))
             {
@@ -333,7 +337,7 @@ public sealed class WindowsWifiNetworkMonitor
         public Guid InterfaceGuid;
 
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
-        public string InterfaceDescription;
+        public string? InterfaceDescription;
 
         public WlanInterfaceState State;
     }
@@ -344,7 +348,7 @@ public sealed class WindowsWifiNetworkMonitor
         public uint Length;
 
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)]
-        public byte[] Bytes;
+        public byte[]? Bytes;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -354,7 +358,7 @@ public sealed class WindowsWifiNetworkMonitor
         public int BssType;
 
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = 6)]
-        public byte[] Bssid;
+        public byte[]? Bssid;
 
         public int PhyType;
         public uint PhyIndex;
@@ -379,7 +383,7 @@ public sealed class WindowsWifiNetworkMonitor
         public int ConnectionMode;
 
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
-        public string ProfileName;
+        public string? ProfileName;
 
         public WlanAssociationAttributes AssociationAttributes;
         public WlanSecurityAttributes SecurityAttributes;
