@@ -6,90 +6,80 @@ namespace Lantern.App.Tests;
 public sealed class WindowsWifiNetworkMonitorTests
 {
     [Fact]
-    public void ParseConnectedSsid_ReturnsSsidForConnectedInterface()
+    public void ParseVisibleSsids_ExtractsAllNumberedSsidEntries()
     {
         const string output = """
-            There is 1 interface on the system:
+            There are 3 networks currently visible.
 
-                Name                   : Wi-Fi
-                Description            : Wireless adapter
-                GUID                   : 00000000-0000-0000-0000-000000000000
-                Physical address       : 00:11:22:33:44:55
-                State                  : connected
-                SSID                   : Home-Network-5G
-                BSSID                  : 00:11:22:33:44:66
+            SSID 1 : HUAWEI-AX3
+                Network type            : Infrastructure
+                Authentication          : WPA2-Personal
+                Encryption              : CCMP
+                BSSID 1                 : 00:11:22:33:44:55
+
+            SSID 2 : Redmi-15-5G
+                Network type            : Infrastructure
+                Authentication          : WPA2-Personal
+                Encryption              : CCMP
+                BSSID 1                 : 00:11:22:33:44:66
+
+            SSID 3 : Cafe-WiFi
+                Network type            : Infrastructure
+                Authentication          : Open
+                Encryption              : None
+                BSSID 1                 : 00:11:22:33:44:77
             """;
-        Assert.Equal("Home-Network-5G", WindowsWifiNetworkMonitor.ParseConnectedSsid(output));
+
+        Assert.Equal(
+            new[] { "Cafe-WiFi", "HUAWEI-AX3", "Redmi-15-5G" },
+            WindowsWifiNetworkMonitor.ParseVisibleSsids(output));
     }
 
     [Fact]
-    public void ParseConnectedSsid_IgnoresDisconnectedInterfaceAndBssid()
+    public void ParseVisibleSsids_RemovesBlankAndCaseInsensitiveDuplicateNames()
     {
         const string output = """
-            Name : Wi-Fi
-            State : disconnected
-            SSID : Saved-Network
-            BSSID : 00:11:22:33:44:66
+            There are 3 networks currently visible.
+            SSID 1 : HUAWEI-AX3
+            SSID 2 :
+            SSID 3 : huawei-ax3
             """;
-        Assert.Null(WindowsWifiNetworkMonitor.ParseConnectedSsid(output));
+
+        Assert.Equal(
+            new[] { "HUAWEI-AX3" },
+            WindowsWifiNetworkMonitor.ParseVisibleSsids(output));
+    }
+
+    [Theory]
+    [InlineData("There are 0 networks currently visible.")]
+    [InlineData("There is no network currently visible.")]
+    public void ParseVisibleSsids_ReturnsEmptyWhenNetshExplicitlyReportsNoVisibleNetworks(
+        string output)
+    {
+        Assert.Empty(WindowsWifiNetworkMonitor.ParseVisibleSsids(output));
     }
 
     [Fact]
-    public void ParseConnectedSsid_SelectsConnectedInterfaceAfterDisconnectedOne()
+    public void ParseVisibleSsids_RejectsUnrecognizedOutputInsteadOfReportingNoMatches()
     {
         const string output = """
-            Name : Wi-Fi
-            State : disconnected
-            SSID : Saved-Network
-
-            Name : Wi-Fi 2
-            State : connected
-            SSID : Current-Network
+            Wireless AutoConfig service is not running.
             """;
-        Assert.Equal("Current-Network", WindowsWifiNetworkMonitor.ParseConnectedSsid(output));
+
+        Assert.Throws<InvalidDataException>(
+            () => WindowsWifiNetworkMonitor.ParseVisibleSsids(output));
     }
 
     [Fact]
-    public void ParseConnectedSsid_UsesAssociatedBssidWhenStateValueIsLocalized()
+    public void ParseVisibleSsids_TrimsWhitespaceAroundNetworkNames()
     {
         const string output = """
-            Name : Wi-Fi
-            State : verbunden
-            SSID : Home-Network-5G
-            BSSID : 00:11:22:33:44:66
+            There are 1 networks currently visible.
+            SSID 1 :   My Wi-Fi Network
             """;
 
-        Assert.Equal("Home-Network-5G", WindowsWifiNetworkMonitor.ParseConnectedSsid(output));
-    }
-
-    [Fact]
-    public void ParseConnectedSsid_DoesNotTreatAZeroBssidAsAnAssociation()
-    {
-        const string output = """
-            Name : Wi-Fi
-            State : disconnected
-            SSID : Saved-Network
-            BSSID : 00:00:00:00:00:00
-            """;
-
-        Assert.Null(WindowsWifiNetworkMonitor.ParseConnectedSsid(output));
-    }
-
-    [Fact]
-    public void ParseConnectedSsid_SkipsLocalizedDisconnectedInterfaceBeforeConnectedInterface()
-    {
-        const string output = """
-            Name : Wi-Fi
-            State : getrennt
-            SSID : Saved-Network
-            BSSID : 00:00:00:00:00:00
-
-            Name : Wi-Fi 2
-            State : verbunden
-            SSID : Current-Network
-            BSSID : 00:AA:BB:CC:DD:EE
-            """;
-
-        Assert.Equal("Current-Network", WindowsWifiNetworkMonitor.ParseConnectedSsid(output));
+        Assert.Equal(
+            new[] { "My Wi-Fi Network" },
+            WindowsWifiNetworkMonitor.ParseVisibleSsids(output));
     }
 }
