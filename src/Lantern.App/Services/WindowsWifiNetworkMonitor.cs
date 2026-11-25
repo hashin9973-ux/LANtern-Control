@@ -149,7 +149,7 @@ public sealed class WindowsWifiNetworkMonitor
             }
         }
         catch (Exception exception) when (
-            exception is InvalidOperationException or Win32Exception or ObjectDisposedException)
+            exception is InvalidOperationException or Win32Exception)
         {
             // The process may have exited between the check and the kill.
         }
