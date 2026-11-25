@@ -557,7 +557,7 @@ public partial class MainWindow : Window
 
             NetworkAutomationKeywordTextBox.Clear();
             NetworkAutomationStatusText.Text = engine.IsRunning
-                ? $"Added for {device.DisplayName}. Checking the connected Wi-Fi name now."
+                ? $"Added for {device.DisplayName}. Scanning visible Wi-Fi networks now."
                 : $"Added for {device.DisplayName}. It will pause only while control is active and the Wi-Fi name matches.";
             ConfigureNetworkAutomationTimer();
             StartNetworkAutomationPoll();
@@ -726,8 +726,31 @@ public partial class MainWindow : Window
                 return;
             }
 
-            var ssid = await wifiNetworkMonitor.GetCurrentSsidAsync(
-                networkAutomationCancellation.Token);
+            IReadOnlyList<string> visibleSsids;
+            try
+            {
+                visibleSsids = await wifiNetworkMonitor.GetVisibleSsidsAsync(
+                    networkAutomationCancellation.Token);
+            }
+            catch (OperationCanceledException) when (networkAutomationCancellation.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                foreach (var automation in settings.NetworkKeywordAutomations
+                             .Where(candidate => candidate.Enabled))
+                {
+                    UpdateNetworkAutomationEvaluationStatus(
+                        automation.Id,
+                        "Wi-Fi scan failed — previous device state retained");
+                }
+
+                NetworkAutomationStatusText.Text =
+                    $"Wi-Fi scan failed: {exception.Message}. No device states were changed.";
+                return;
+            }
+
             var checkedCount = 0;
             var pausedCount = 0;
             var unpausedCount = 0;
@@ -736,28 +759,34 @@ public partial class MainWindow : Window
                          .ToArray())
             {
                 networkAutomationCancellation.Token.ThrowIfCancellationRequested();
-                var matches = NetworkKeywordPausePolicy.ShouldPause(
+                var matchingSsids = NetworkKeywordPausePolicy.FindMatches(
                     engine.IsControlling,
-                    ssid,
+                    visibleSsids,
                     automation.NetworkKeyword);
-                await ApplyNetworkAutomationPauseStateAsync(automation.DeviceMacAddress, matches);
+                var shouldPause = matchingSsids.Count > 0;
+                await ApplyNetworkAutomationPauseStateAsync(
+                    automation.DeviceMacAddress,
+                    shouldPause);
                 automation.HasCapturedPauseState = false;
                 automation.OriginalPauseInternet = false;
-                var evaluationStatus = string.IsNullOrWhiteSpace(ssid)
-                    ? "No connected Wi-Fi SSID — device unpaused"
-                    : matches
-                        ? $"Match — '{ssid}' contains '{automation.NetworkKeyword}'; device paused"
-                        : $"No match — '{ssid}' does not contain '{automation.NetworkKeyword}'; device unpaused";
+
+                var evaluationStatus = shouldPause
+                    ? $"Match — {string.Join(", ", matchingSsids.Select(ssid => $"'{ssid}'"))} contains '{automation.NetworkKeyword}'; device paused"
+                    : visibleSsids.Count == 0
+                        ? "No visible Wi-Fi networks — device unpaused"
+                        : $"No match — none of {visibleSsids.Count} visible networks contains '{automation.NetworkKeyword}'; device unpaused";
                 UpdateNetworkAutomationEvaluationStatus(automation.Id, evaluationStatus);
                 checkedCount++;
-                if (matches) pausedCount++;
+                if (shouldPause) pausedCount++;
                 else unpausedCount++;
             }
 
             await SaveSettingsIfDirtyAsync();
-            NetworkAutomationStatusText.Text = string.IsNullOrWhiteSpace(ssid)
-                ? $"No connected Wi-Fi name was found. Checked {checkedCount} automation(s); target devices are unpaused."
-                : $"Connected Wi-Fi: {ssid}. Checked {checkedCount} automation(s): {pausedCount} paused, {unpausedCount} unpaused.";
+            var scanSummary = visibleSsids.Count == 0
+                ? "No Wi-Fi networks are currently visible."
+                : $"Visible Wi-Fi networks ({visibleSsids.Count}): {string.Join(", ", visibleSsids)}.";
+            NetworkAutomationStatusText.Text =
+                $"{scanSummary} Checked {checkedCount} automation(s): {pausedCount} paused, {unpausedCount} unpaused.";
         }
         catch (OperationCanceledException) when (networkAutomationCancellation.IsCancellationRequested)
         {
