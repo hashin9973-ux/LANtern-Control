@@ -1,199 +1,107 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
-using System.Runtime.InteropServices;
-using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Lantern.App.Services;
 
 /// <summary>
-/// Reads the SSID of the currently connected Windows WLAN interface.
-/// Native Wi-Fi is preferred because its API is independent of the Windows display language.
-/// netsh remains as a fallback for systems where the WLAN API cannot be queried.
+/// Scans the Wi-Fi networks currently visible to the Windows wireless adapter.
+/// SSID extraction follows the same numbered-SSID output produced by
+/// "netsh wlan show networks mode=bssid".
 /// </summary>
 public sealed class WindowsWifiNetworkMonitor
 {
-    private const uint WlanClientVersion = 2;
-    private const int CurrentConnectionOpcode = 7;
-    private const WlanInterfaceState ConnectedInterfaceState = WlanInterfaceState.Connected;
-    private const int MaximumEnumeratedInterfaces = 64;
-    private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(4);
+    private static readonly TimeSpan ScanTimeout = TimeSpan.FromSeconds(15);
 
-    public async Task<string?> GetCurrentSsidAsync(CancellationToken cancellationToken = default)
+    private static readonly Regex VisibleSsidPattern = new(
+        @"(?im)^\s*SSID\s+\d+\s*:\s*(.*)$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex NoVisibleNetworksPattern = new(
+        @"(?i)\b(?:0|no)\s+networks?\s+currently\s+visible\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    public async Task<IReadOnlyList<string>> GetVisibleSsidsAsync(
+        CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-
-        // Keep synchronous WLAN service calls off the WPF dispatcher.
-        var nativeSsid = await Task.Run(
-            TryGetCurrentSsidFromNativeWifi,
-            cancellationToken).ConfigureAwait(false);
-        if (!string.IsNullOrWhiteSpace(nativeSsid))
-        {
-            return nativeSsid;
-        }
-
-        return await GetCurrentSsidFromNetshAsync(cancellationToken).ConfigureAwait(false);
+        var output = await GetNetworkScanOutputAsync(cancellationToken).ConfigureAwait(false);
+        return ParseVisibleSsids(output);
     }
 
-    private static string? TryGetCurrentSsidFromNativeWifi()
+    public static IReadOnlyList<string> ParseVisibleSsids(string output)
     {
-        IntPtr clientHandle = IntPtr.Zero;
-        IntPtr interfaceList = IntPtr.Zero;
-        try
+        ArgumentNullException.ThrowIfNull(output);
+
+        var ssids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (Match match in VisibleSsidPattern.Matches(output))
         {
-            var result = WlanOpenHandle(
-                WlanClientVersion,
-                IntPtr.Zero,
-                out _,
-                out clientHandle);
-            if (result != 0 || clientHandle == IntPtr.Zero)
+            var ssid = match.Groups[1].Value.Trim();
+            if (!string.IsNullOrWhiteSpace(ssid))
             {
-                return null;
-            }
-
-            result = WlanEnumInterfaces(clientHandle, IntPtr.Zero, out interfaceList);
-            if (result != 0 || interfaceList == IntPtr.Zero)
-            {
-                return null;
-            }
-
-            // WLAN_INTERFACE_INFO_LIST begins with two DWORD values, followed by
-            // its variable-length WLAN_INTERFACE_INFO array.
-            var interfaceCount = Marshal.ReadInt32(interfaceList);
-            if (interfaceCount is < 0 or > MaximumEnumeratedInterfaces)
-            {
-                return null;
-            }
-
-            var interfaceSize = Marshal.SizeOf<WlanInterfaceInfo>();
-            var firstInterfaceOffset = sizeof(uint) * 2;
-            for (var index = 0; index < interfaceCount; index++)
-            {
-                var interfacePointer = IntPtr.Add(
-                    interfaceList,
-                    firstInterfaceOffset + (index * interfaceSize));
-                var wlanInterface = Marshal.PtrToStructure<WlanInterfaceInfo>(interfacePointer);
-                _ = wlanInterface.InterfaceDescription;
-                if (wlanInterface.State != ConnectedInterfaceState)
-                {
-                    continue;
-                }
-
-                IntPtr connectionData = IntPtr.Zero;
-                try
-                {
-                    result = WlanQueryInterface(
-                        clientHandle,
-                        ref wlanInterface.InterfaceGuid,
-                        CurrentConnectionOpcode,
-                        IntPtr.Zero,
-                        out _,
-                        out connectionData,
-                        out _);
-                    if (result != 0 || connectionData == IntPtr.Zero)
-                    {
-                        continue;
-                    }
-
-                    var connection = Marshal.PtrToStructure<WlanConnectionAttributes>(connectionData);
-                    _ = connection.ProfileName;
-                    _ = connection.AssociationAttributes.Bssid;
-                    _ = connection.SecurityAttributes.SecurityEnabled;
-                    _ = connection.SecurityAttributes.OneXEnabled;
-                    _ = connection.SecurityAttributes.AuthenticationAlgorithm;
-                    _ = connection.SecurityAttributes.CipherAlgorithm;
-                    if (connection.State != ConnectedInterfaceState)
-                    {
-                        continue;
-                    }
-
-                    var ssid = connection.AssociationAttributes.Ssid;
-                    if (ssid.Length is 0 or > 32 ||
-                        ssid.Bytes is null ||
-                        ssid.Bytes.Length < ssid.Length)
-                    {
-                        continue;
-                    }
-
-                    var value = Encoding.UTF8.GetString(
-                        ssid.Bytes,
-                        0,
-                        checked((int)ssid.Length));
-                    if (!string.IsNullOrWhiteSpace(value))
-                    {
-                        return value;
-                    }
-                }
-                finally
-                {
-                    if (connectionData != IntPtr.Zero)
-                    {
-                        WlanFreeMemory(connectionData);
-                    }
-                }
-            }
-
-            return null;
-        }
-        catch (Exception exception) when (
-            exception is DllNotFoundException or
-                EntryPointNotFoundException or
-                BadImageFormatException or
-                MarshalDirectiveException or
-                ArgumentException or
-                OverflowException or
-                InvalidOperationException)
-        {
-            // Fall back to netsh on systems where Native Wi-Fi is unavailable.
-            return null;
-        }
-        finally
-        {
-            if (interfaceList != IntPtr.Zero)
-            {
-                WlanFreeMemory(interfaceList);
-            }
-
-            if (clientHandle != IntPtr.Zero)
-            {
-                _ = WlanCloseHandle(clientHandle, IntPtr.Zero);
+                ssids.Add(ssid);
             }
         }
+
+        if (ssids.Count == 0 && !NoVisibleNetworksPattern.IsMatch(output))
+        {
+            throw new InvalidDataException(
+                "Wi-Fi scan returned no recognizable SSIDs. The scan output was not treated as an empty network list.");
+        }
+
+        return ssids
+            .OrderBy(ssid => ssid, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
-    private async Task<string?> GetCurrentSsidFromNetshAsync(CancellationToken cancellationToken)
+    private static async Task<string> GetNetworkScanOutputAsync(
+        CancellationToken cancellationToken)
     {
-        using var process = new Process
+        var startInfo = new ProcessStartInfo
         {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = "netsh.exe",
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            },
+            FileName = Path.Combine(Environment.SystemDirectory, "netsh.exe"),
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
         };
-        process.StartInfo.ArgumentList.Add("wlan");
-        process.StartInfo.ArgumentList.Add("show");
-        process.StartInfo.ArgumentList.Add("interfaces");
+        startInfo.ArgumentList.Add("wlan");
+        startInfo.ArgumentList.Add("show");
+        startInfo.ArgumentList.Add("networks");
+        startInfo.ArgumentList.Add("mode=bssid");
 
+        using var process = new Process { StartInfo = startInfo };
         var started = false;
+
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!process.Start()) return null;
+            if (!process.Start())
+            {
+                throw new IOException("Windows could not start the Wi-Fi network scan.");
+            }
+
             started = true;
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(CommandTimeout);
+            timeout.CancelAfter(ScanTimeout);
+
             var outputTask = process.StandardOutput.ReadToEndAsync(timeout.Token);
             var errorTask = process.StandardError.ReadToEndAsync(timeout.Token);
+
             try
             {
                 await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
                 var output = await outputTask.ConfigureAwait(false);
-                _ = await errorTask.ConfigureAwait(false);
-                return process.ExitCode == 0 ? ParseConnectedSsid(output) : null;
+                var error = await errorTask.ConfigureAwait(false);
+
+                if (process.ExitCode != 0)
+                {
+                    var details = string.IsNullOrWhiteSpace(error) ? output : error;
+                    throw new IOException(
+                        $"Wi-Fi scan failed with exit code {process.ExitCode}. {details.Trim()}");
+                }
+
+                return output;
             }
             catch (OperationCanceledException)
             {
@@ -203,150 +111,31 @@ public sealed class WindowsWifiNetworkMonitor
                     await Task.WhenAll(outputTask, errorTask).ConfigureAwait(false);
                 }
                 catch (Exception exception) when (
-                    exception is OperationCanceledException or IOException)
+                    exception is OperationCanceledException or IOException or ObjectDisposedException)
                 {
-                    // The process was cancelled or terminated during cleanup.
+                    // The redirected streams may be cancelled while the process is being stopped.
                 }
 
                 if (cancellationToken.IsCancellationRequested)
+                {
                     throw;
+                }
 
-                return null;
+                throw new TimeoutException(
+                    $"The Windows Wi-Fi scan did not finish within {ScanTimeout.TotalSeconds:0} seconds.");
             }
         }
-        catch (OperationCanceledException)
+        catch (Win32Exception exception)
         {
-            throw;
-        }
-        catch (Exception exception) when (
-            exception is Win32Exception or InvalidOperationException or IOException)
-        {
-            return null;
+            throw new IOException("Could not start netsh to scan visible Wi-Fi networks.", exception);
         }
         finally
         {
-            if (started) TryKill(process);
-        }
-    }
-
-    public static string? ParseConnectedSsid(string output)
-    {
-        ArgumentNullException.ThrowIfNull(output);
-
-        string? candidateSsid = null;
-        var stateSaysConnected = false;
-        var stateSaysDisconnected = false;
-        var hasAssociatedBssid = false;
-
-        string? FinishCurrentInterface()
-        {
-            if (string.IsNullOrWhiteSpace(candidateSsid))
+            if (started)
             {
-                return null;
-            }
-
-            return stateSaysConnected || (!stateSaysDisconnected && hasAssociatedBssid)
-                ? candidateSsid
-                : null;
-        }
-
-        void ResetCurrentInterface()
-        {
-            candidateSsid = null;
-            stateSaysConnected = false;
-            stateSaysDisconnected = false;
-            hasAssociatedBssid = false;
-        }
-
-        foreach (var line in output.Split(['\r', '\n']))
-        {
-            if (string.IsNullOrWhiteSpace(line))
-            {
-                // Some localized netsh versions omit a recognizable interface-name
-                // label. A completed SSID block is still separated by a blank line.
-                if (candidateSsid is not null)
-                {
-                    var completed = FinishCurrentInterface();
-                    if (completed is not null)
-                    {
-                        return completed;
-                    }
-
-                    ResetCurrentInterface();
-                }
-
-                continue;
-            }
-
-            var separator = line.IndexOf(':');
-            if (separator <= 0)
-            {
-                continue;
-            }
-
-            var key = line[..separator].Trim();
-            var value = line[(separator + 1)..].Trim();
-            if (key.Equals("Name", StringComparison.OrdinalIgnoreCase))
-            {
-                var completed = FinishCurrentInterface();
-                if (completed is not null)
-                {
-                    return completed;
-                }
-
-                ResetCurrentInterface();
-            }
-            else if (key.Equals("State", StringComparison.OrdinalIgnoreCase))
-            {
-                stateSaysConnected =
-                    value.Equals("connected", StringComparison.OrdinalIgnoreCase) ||
-                    value.Equals("verbunden", StringComparison.OrdinalIgnoreCase) ||
-                    value.Equals("conectado", StringComparison.OrdinalIgnoreCase) ||
-                    value.Equals("connecté", StringComparison.OrdinalIgnoreCase) ||
-                    value.Equals("connesso", StringComparison.OrdinalIgnoreCase) ||
-                    value.Equals("verbonden", StringComparison.OrdinalIgnoreCase) ||
-                    value.Equals("已连接", StringComparison.OrdinalIgnoreCase) ||
-                    value.Equals("接続済み", StringComparison.OrdinalIgnoreCase) ||
-                    value.Equals("연결됨", StringComparison.OrdinalIgnoreCase);
-                stateSaysDisconnected =
-                    value.Equals("disconnected", StringComparison.OrdinalIgnoreCase) ||
-                    value.Equals("getrennt", StringComparison.OrdinalIgnoreCase) ||
-                    value.Equals("desconectado", StringComparison.OrdinalIgnoreCase) ||
-                    value.Equals("déconnecté", StringComparison.OrdinalIgnoreCase) ||
-                    value.Equals("disconnesso", StringComparison.OrdinalIgnoreCase) ||
-                    value.Equals("verbroken", StringComparison.OrdinalIgnoreCase) ||
-                    value.Equals("已断开连接", StringComparison.OrdinalIgnoreCase) ||
-                    value.Equals("未接続", StringComparison.OrdinalIgnoreCase) ||
-                    value.Equals("연결 끊김", StringComparison.OrdinalIgnoreCase);
-            }
-            else if (key.Equals("SSID", StringComparison.OrdinalIgnoreCase))
-            {
-                candidateSsid = value;
-            }
-            else if (key.Equals("BSSID", StringComparison.OrdinalIgnoreCase))
-            {
-                hasAssociatedBssid = IsUsableBssid(value);
+                TryKill(process);
             }
         }
-
-        return FinishCurrentInterface();
-    }
-
-    private static bool IsUsableBssid(string value)
-    {
-        // Validate the address without relying on Split overload resolution.
-        // netsh emits six two-digit octets separated by either ':' or '-'.
-        var hexDigits = new string(value.Where(Uri.IsHexDigit).ToArray());
-        if (hexDigits.Length != 12 ||
-            value.Any(character =>
-                !Uri.IsHexDigit(character) &&
-                character is not ':' and not '-' &&
-                !char.IsWhiteSpace(character)))
-        {
-            return false;
-        }
-
-        return hexDigits.Any(character => character != '0');
     }
 
     private static void TryKill(Process process)
@@ -360,108 +149,9 @@ public sealed class WindowsWifiNetworkMonitor
             }
         }
         catch (Exception exception) when (
-            exception is InvalidOperationException or Win32Exception)
+            exception is InvalidOperationException or Win32Exception or ObjectDisposedException)
         {
+            // The process may have exited between the check and the kill.
         }
     }
-
-    private enum WlanInterfaceState
-    {
-        NotReady,
-        Connected,
-        AdHocNetworkFormed,
-        Disconnecting,
-        Disconnected,
-        Associating,
-        Discovering,
-        Authenticating,
-    }
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct WlanInterfaceInfo
-    {
-        public Guid InterfaceGuid;
-
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
-        public string? InterfaceDescription;
-
-        public WlanInterfaceState State;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct Dot11Ssid
-    {
-        public uint Length;
-
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)]
-        public byte[]? Bytes;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct WlanAssociationAttributes
-    {
-        public Dot11Ssid Ssid;
-        public int BssType;
-
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 6)]
-        public byte[]? Bssid;
-
-        public int PhyType;
-        public uint PhyIndex;
-        public uint SignalQuality;
-        public uint ReceiveRate;
-        public uint TransmitRate;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct WlanSecurityAttributes
-    {
-        public int SecurityEnabled;
-        public int OneXEnabled;
-        public int AuthenticationAlgorithm;
-        public int CipherAlgorithm;
-    }
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct WlanConnectionAttributes
-    {
-        public WlanInterfaceState State;
-        public int ConnectionMode;
-
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
-        public string? ProfileName;
-
-        public WlanAssociationAttributes AssociationAttributes;
-        public WlanSecurityAttributes SecurityAttributes;
-    }
-
-    [DllImport("wlanapi.dll", ExactSpelling = true)]
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    private static extern uint WlanOpenHandle(
-        uint clientVersion,
-        IntPtr reserved,
-        out uint negotiatedVersion,
-        out IntPtr clientHandle);
-
-    [DllImport("wlanapi.dll", ExactSpelling = true)]
-    private static extern uint WlanEnumInterfaces(
-        IntPtr clientHandle,
-        IntPtr reserved,
-        out IntPtr interfaceList);
-
-    [DllImport("wlanapi.dll", ExactSpelling = true)]
-    private static extern uint WlanQueryInterface(
-        IntPtr clientHandle,
-        ref Guid interfaceGuid,
-        int opcode,
-        IntPtr reserved,
-        out uint dataSize,
-        out IntPtr data,
-        out int valueType);
-
-    [DllImport("wlanapi.dll", ExactSpelling = true)]
-    private static extern void WlanFreeMemory(IntPtr memory);
-
-    [DllImport("wlanapi.dll", ExactSpelling = true)]
-    private static extern uint WlanCloseHandle(IntPtr clientHandle, IntPtr reserved);
 }
