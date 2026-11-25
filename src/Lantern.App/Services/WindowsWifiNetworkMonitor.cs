@@ -1,26 +1,17 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
-using System.Text.RegularExpressions;
 
 namespace Lantern.App.Services;
 
 /// <summary>
 /// Scans the Wi-Fi networks currently visible to the Windows wireless adapter.
-/// SSID extraction follows the same numbered-SSID output produced by
+/// SSID extraction follows the numbered entries produced by
 /// "netsh wlan show networks mode=bssid".
 /// </summary>
 public sealed class WindowsWifiNetworkMonitor
 {
     private static readonly TimeSpan ScanTimeout = TimeSpan.FromSeconds(15);
-
-    private static readonly Regex VisibleSsidPattern = new(
-        @"(?im)^[ \t]*SSID[ \t]+\d+[ \t]*:[ \t]*([^\r\n]*)$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
-    private static readonly Regex NoVisibleNetworksPattern = new(
-        @"(?i)\b(?:0|no)\s+networks?\s+currently\s+visible\b",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public async Task<IReadOnlyList<string>> GetVisibleSsidsAsync(
         CancellationToken cancellationToken = default)
@@ -33,17 +24,40 @@ public sealed class WindowsWifiNetworkMonitor
     {
         ArgumentNullException.ThrowIfNull(output);
 
-        var ssids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (Match match in VisibleSsidPattern.Matches(output))
+        var seenSsids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var ssids = new List<string>();
+
+        // Parse each line separately. In particular, whitespace after an empty
+        // "SSID n :" entry must not consume the next line's SSID label.
+        foreach (var line in output.Split(['\\r', '\\n'], StringSplitOptions.RemoveEmptyEntries))
         {
-            var ssid = match.Groups[1].Value.Trim();
-            if (!string.IsNullOrWhiteSpace(ssid))
+            var trimmedLine = line.TrimStart();
+            var separator = trimmedLine.IndexOf(':');
+            if (separator < 0)
+            {
+                continue;
+            }
+
+            var label = trimmedLine[..separator].Trim();
+            if (!label.StartsWith("SSID", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var numberText = label["SSID".Length..].Trim();
+            if (numberText.Length == 0 || !numberText.All(char.IsDigit))
+            {
+                continue;
+            }
+
+            var ssid = trimmedLine[(separator + 1)..].Trim();
+            if (!string.IsNullOrWhiteSpace(ssid) && seenSsids.Add(ssid))
             {
                 ssids.Add(ssid);
             }
         }
 
-        if (ssids.Count == 0 && !NoVisibleNetworksPattern.IsMatch(output))
+        if (ssids.Count == 0 && !ReportsNoVisibleNetworks(output))
         {
             throw new InvalidDataException(
                 "Wi-Fi scan returned no recognizable SSIDs. The scan output was not treated as an empty network list.");
@@ -53,6 +67,11 @@ public sealed class WindowsWifiNetworkMonitor
             .OrderBy(ssid => ssid, StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
+
+    private static bool ReportsNoVisibleNetworks(string output) =>
+        output.Contains("0 networks currently visible", StringComparison.OrdinalIgnoreCase) ||
+        output.Contains("no networks currently visible", StringComparison.OrdinalIgnoreCase) ||
+        output.Contains("no network currently visible", StringComparison.OrdinalIgnoreCase);
 
     private static async Task<string> GetNetworkScanOutputAsync(
         CancellationToken cancellationToken)
