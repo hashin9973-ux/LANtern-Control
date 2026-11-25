@@ -29,7 +29,8 @@ public sealed class WindowsWifiNetworkMonitor
 
         // Parse each line separately. In particular, whitespace after an empty
         // "SSID n :" entry must not consume the next line's SSID label.
-        foreach (var line in output.Split(['\\r', '\\n'], StringSplitOptions.RemoveEmptyEntries))
+        using var reader = new StringReader(output);
+        while (reader.ReadLine() is { } line)
         {
             var trimmedLine = line.TrimStart();
             var separator = trimmedLine.IndexOf(':');
