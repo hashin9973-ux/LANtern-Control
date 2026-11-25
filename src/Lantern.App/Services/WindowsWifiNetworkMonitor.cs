@@ -15,7 +15,7 @@ public sealed class WindowsWifiNetworkMonitor
     private static readonly TimeSpan ScanTimeout = TimeSpan.FromSeconds(15);
 
     private static readonly Regex VisibleSsidPattern = new(
-        @"(?im)^[ \\t]*SSID[ \\t]+\\d+[ \\t]*:[ \\t]*([^\\r\\n]*)$",
+        @"(?im)^[ \t]*SSID[ \t]+\d+[ \t]*:[ \t]*([^\r\n]*)$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex NoVisibleNetworksPattern = new(
