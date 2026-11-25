@@ -28,7 +28,7 @@ public sealed class NetworkKeywordPausePolicyTests
             new[] { "Redmi-15-5G" },
             NetworkKeywordPausePolicy.FindMatches(
                 controlEnabled: true,
-                visibleSsids,
+                visibleSsids: visibleSsids,
                 keyword: "redmi"));
     }
 
