@@ -2103,7 +2103,7 @@
                                    FontSize="22"
                                    FontWeight="Bold" />
                         <TextBlock Margin="0,6,0,0"
-                                   Text="Match a keyword against the connected Wi-Fi name (SSID). While control is active and it matches, the target device's normal Paused setting is turned on. When the SSID does not match or is unavailable, the target is unpaused."
+                                   Text="Scan all Wi-Fi network names (SSIDs) currently visible to this PC. While control is active, a matching SSID pauses the target device through its normal Paused setting. When no visible SSID matches, the target is unpaused."
                                    Foreground="{StaticResource SecondaryText}"
                                    FontSize="12"
                                    TextWrapping="Wrap" />
@@ -2140,7 +2140,7 @@
                                          Foreground="{StaticResource PrimaryText}"
                                          BorderBrush="{StaticResource Border}"
                                          MaxLength="128"
-                                         ToolTip="Pause the target while its connected Wi-Fi name contains this text" />
+                                         ToolTip="Pause the target when any currently visible Wi-Fi network name contains this text" />
                             </StackPanel>
                             <Button Grid.Column="2"
                                     Margin="0,20,0,0"
@@ -2172,7 +2172,7 @@
                                      BorderBrush="{StaticResource Border}"
                                      MaxLength="4"
                                      Text="15"
-                                     ToolTip="How often to check the connected Wi-Fi name (5–3600 seconds)"
+                                     ToolTip="How often to scan for visible Wi-Fi network names (5–3600 seconds)"
                                      LostFocus="NetworkAutomationPollIntervalTextBox_OnLostFocus"
                                      AutomationProperties.AutomationId="network_automation_poll_interval" />
                             <TextBlock Grid.Column="2"
@@ -2237,7 +2237,7 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
                         <TextBlock Margin="0,8,0,0"
-                                   Text="Automations run only while LANtern is open and Start control is active. A keyword match is case-insensitive and checks the current connected Wi-Fi SSID. Ethernet-only connections do not provide a Wi-Fi name to match."
+                                   Text="Automations run only while LANtern is open and Start control is active. Each scan checks all Wi-Fi SSIDs currently visible to this PC, whether or not this PC is connected to them. Matching is case-insensitive. A failed or unrecognized scan leaves the devices' existing pause states unchanged."
                                    Foreground="{StaticResource SecondaryText}"
                                    FontSize="11"
                                    TextWrapping="Wrap" />
