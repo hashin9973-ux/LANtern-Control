@@ -1,7 +1,8 @@
 <UserControl x:Class="Lantern.App.Views.DashboardView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:controls="clr-namespace:Lantern.App.Controls">
+             xmlns:controls="clr-namespace:Lantern.App.Controls"
+             xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework">
     <UserControl.Resources>
 
         <StreamGeometry x:Key="IconOverview">M2,2 H8 V8 H2 Z M12,2 H18 V8 H12 Z M2,12 H8 V18 H2 Z M12,12 H18 V18 H12 Z</StreamGeometry>
