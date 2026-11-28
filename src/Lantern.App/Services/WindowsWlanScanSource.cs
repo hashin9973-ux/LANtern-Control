@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.ComponentModel;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
@@ -226,8 +227,8 @@ internal sealed class WindowsWlanScanSource : IWindowsWifiScanSource
             handle,
             ref interfaceGuid,
             IntPtr.Zero,
-            dot11BssTypeAny: 3,
-            securityEnabled: false,
+            3,
+            false,
             IntPtr.Zero,
             out var bssList);
 
