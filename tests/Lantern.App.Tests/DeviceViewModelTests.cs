@@ -440,7 +440,8 @@ public sealed class DeviceViewModelTests
                         GetProjectRoot(),
                         "src",
                         "Lantern.App",
-                        "MainWindow.xaml"));
+                        "Views",
+                        "DashboardView.xaml"));
                     Assert.DoesNotContain("Text=\"LOCAL PROCESSING\"", xaml, StringComparison.Ordinal);
                     Assert.DoesNotContain("Text=\"1 sec live\"", xaml, StringComparison.Ordinal);
                     Assert.DoesNotContain("1 second samples", xaml, StringComparison.Ordinal);
