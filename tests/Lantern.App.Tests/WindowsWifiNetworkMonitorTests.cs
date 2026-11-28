@@ -1,3 +1,6 @@
+using System.Buffers.Binary;
+using System.Runtime.InteropServices;
+using System.Text;
 using Lantern.App.Services;
 using Xunit;
 
@@ -6,80 +9,141 @@ namespace Lantern.App.Tests;
 public sealed class WindowsWifiNetworkMonitorTests
 {
     [Fact]
-    public void ParseVisibleSsids_ExtractsAllNumberedSsidEntries()
+    public void BssEntryLayout_MatchesNativeWifiStructureSize()
     {
-        const string output = """
-            There are 3 networks currently visible.
+        Assert.Equal(360, WindowsWlanScanSource.BssEntrySize);
+    }
 
-            SSID 1 : HUAWEI-AX3
-                Network type            : Infrastructure
-                Authentication          : WPA2-Personal
-                Encryption              : CCMP
-                BSSID 1                 : 00:11:22:33:44:55
-
-            SSID 2 : Redmi-15-5G
-                Network type            : Infrastructure
-                Authentication          : WPA2-Personal
-                Encryption              : CCMP
-                BSSID 1                 : 00:11:22:33:44:66
-
-            SSID 3 : Cafe-WiFi
-                Network type            : Infrastructure
-                Authentication          : Open
-                Encryption              : None
-                BSSID 1                 : 00:11:22:33:44:77
-            """;
+    [Fact]
+    public void ParseBssList_ExtractsAllVisibleSsidEntries()
+    {
+        var result = Parse(CreateBssList("HUAWEI-AX3", "Redmi-15-5G", "Cafe-WiFi"));
 
         Assert.Equal(
             new[] { "Cafe-WiFi", "HUAWEI-AX3", "Redmi-15-5G" },
-            WindowsWifiNetworkMonitor.ParseVisibleSsids(output));
+            result);
     }
 
     [Fact]
-    public void ParseVisibleSsids_RemovesBlankAndCaseInsensitiveDuplicateNames()
+    public void ParseBssList_DeduplicatesSsidAcrossMultipleBssids()
     {
-        const string output = """
-            There are 3 networks currently visible.
-            SSID 1 : HUAWEI-AX3
-            SSID 2 :
-            SSID 3 : huawei-ax3
-            """;
+        var result = Parse(CreateBssList("HUAWEI-AX3", "huawei-ax3", "Cafe-WiFi"));
 
-        Assert.Equal(
-            new[] { "HUAWEI-AX3" },
-            WindowsWifiNetworkMonitor.ParseVisibleSsids(output));
-    }
-
-    [Theory]
-    [InlineData("There are 0 networks currently visible.")]
-    [InlineData("There is no network currently visible.")]
-    public void ParseVisibleSsids_ReturnsEmptyWhenNetshExplicitlyReportsNoVisibleNetworks(
-        string output)
-    {
-        Assert.Empty(WindowsWifiNetworkMonitor.ParseVisibleSsids(output));
+        Assert.Equal(new[] { "Cafe-WiFi", "HUAWEI-AX3" }, result);
     }
 
     [Fact]
-    public void ParseVisibleSsids_RejectsUnrecognizedOutputInsteadOfReportingNoMatches()
+    public void ParseBssList_ReturnsEmptyForSuccessfulEmptyBssList()
     {
-        const string output = """
-            Wireless AutoConfig service is not running.
-            """;
-
-        Assert.Throws<InvalidDataException>(
-            () => WindowsWifiNetworkMonitor.ParseVisibleSsids(output));
+        Assert.Empty(Parse(CreateBssList()));
     }
 
     [Fact]
-    public void ParseVisibleSsids_TrimsWhitespaceAroundNetworkNames()
+    public void ParseBssList_RejectsEntryCountOutsideReturnedBuffer()
     {
-        const string output = """
-            There are 1 networks currently visible.
-            SSID 1 :   My Wi-Fi Network
-            """;
+        var buffer = new byte[sizeof(uint) * 2];
+        BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(0, sizeof(uint)), (uint)buffer.Length);
+        BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(sizeof(uint), sizeof(uint)), 1);
 
-        Assert.Equal(
-            new[] { "My Wi-Fi Network" },
-            WindowsWifiNetworkMonitor.ParseVisibleSsids(output));
+        Assert.Throws<InvalidDataException>(() => Parse(buffer));
+    }
+
+    [Fact]
+    public void ParseBssList_RejectsSsidLengthLargerThanDot11Maximum()
+    {
+        var buffer = CreateBssList("Cafe-WiFi");
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            buffer.AsSpan(sizeof(uint) * 2, sizeof(uint)),
+            33);
+
+        Assert.Throws<InvalidDataException>(() => Parse(buffer));
+    }
+
+    [Fact]
+    public async Task GetVisibleSsidsAsync_ReusesOnlyARecentSuccessfulScan()
+    {
+        var source = new FakeWifiScanSource(new[] { "HUAWEI-AX3", "Cafe-WiFi", "cafe-wifi" });
+        var monitor = new WindowsWifiNetworkMonitor(source, TimeSpan.FromMinutes(1));
+
+        var first = await monitor.GetVisibleSsidsAsync();
+        var second = await monitor.GetVisibleSsidsAsync();
+
+        Assert.Equal(new[] { "Cafe-WiFi", "HUAWEI-AX3" }, first);
+        Assert.Equal(first, second);
+        Assert.Equal(1, source.ScanCount);
+    }
+
+    [Fact]
+    public async Task GetVisibleSsidsAsync_DoesNotCacheFailedScan()
+    {
+        var source = new FakeWifiScanSource(
+            new InvalidOperationException("Location permission is missing."),
+            new[] { "Cafe-WiFi" });
+        var monitor = new WindowsWifiNetworkMonitor(source, TimeSpan.FromMinutes(1));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => monitor.GetVisibleSsidsAsync());
+
+        var result = await monitor.GetVisibleSsidsAsync();
+
+        Assert.Equal(new[] { "Cafe-WiFi" }, result);
+        Assert.Equal(2, source.ScanCount);
+    }
+
+    private static IReadOnlyList<string> Parse(byte[] buffer)
+    {
+        var pointer = Marshal.AllocHGlobal(buffer.Length);
+        try
+        {
+            Marshal.Copy(buffer, 0, pointer, buffer.Length);
+            return WindowsWlanScanSource.ParseBssList(pointer);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(pointer);
+        }
+    }
+
+    private static byte[] CreateBssList(params string[] ssids)
+    {
+        var entrySize = WindowsWlanScanSource.BssEntrySize;
+        var buffer = new byte[sizeof(uint) * 2 + entrySize * ssids.Length];
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            buffer.AsSpan(0, sizeof(uint)),
+            (uint)buffer.Length);
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            buffer.AsSpan(sizeof(uint), sizeof(uint)),
+            (uint)ssids.Length);
+
+        for (var index = 0; index < ssids.Length; index++)
+        {
+            var bytes = Encoding.UTF8.GetBytes(ssids[index]);
+            var entryOffset = sizeof(uint) * 2 + entrySize * index;
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                buffer.AsSpan(entryOffset, sizeof(uint)),
+                (uint)bytes.Length);
+            bytes.CopyTo(buffer.AsSpan(entryOffset + sizeof(uint), bytes.Length));
+        }
+
+        return buffer;
+    }
+
+    private sealed class FakeWifiScanSource(params object[] responses) : IWindowsWifiScanSource
+    {
+        public int ScanCount { get; private set; }
+
+        public Task<IReadOnlyList<string>> ScanVisibleSsidsAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var responseIndex = Math.Min(ScanCount, responses.Length - 1);
+            ScanCount++;
+
+            return responses[responseIndex] switch
+            {
+                Exception exception => Task.FromException<IReadOnlyList<string>>(exception),
+                IReadOnlyList<string> ssids => Task.FromResult(ssids),
+                _ => throw new InvalidOperationException("Unexpected fake Wi-Fi scan response.")
+            };
+        }
     }
 }
