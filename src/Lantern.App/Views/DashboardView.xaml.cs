@@ -51,7 +51,7 @@ public partial class DashboardView : UserControl
 
     private void ClearDeviceCacheButton_OnClick(
         object sender,
-        RoutedEventArgs eventArgs) => owner.ClearDeviceCacheButton_OnClick(sender, eventArgs);
+        RoutedEventArgs eventArgs) => owner.ForwardClearDeviceCacheButton_OnClick(sender, eventArgs);
 
     private void DeviceGrid_OnLoadingRow(object? sender, DataGridRowEventArgs eventArgs) => owner.DeviceGrid_OnLoadingRow(sender, eventArgs);
 

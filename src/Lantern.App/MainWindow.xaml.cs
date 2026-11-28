@@ -130,6 +130,10 @@ public partial class MainWindow : Window
 
     private object? FindDashboardElement(string name) => dashboard?.FindName(name);
 
+    public new object? FindName(string name) =>
+        dashboard?.FindName(name) ?? base.FindName(name);
+
+
     private dynamic SidebarVersionText => FindDashboardElement(nameof(SidebarVersionText))!;
     private dynamic MainScrollViewer => FindDashboardElement(nameof(MainScrollViewer))!;
     private dynamic OverviewSection => FindDashboardElement(nameof(OverviewSection))!;
@@ -1909,7 +1913,12 @@ public partial class MainWindow : Window
         }
     }
 
-    internal async void ClearDeviceCacheButton_OnClick(
+    internal void ForwardClearDeviceCacheButton_OnClick(
+        object sender,
+        RoutedEventArgs eventArgs) =>
+        ClearDeviceCacheButton_OnClick(sender, eventArgs);
+
+    private async void ClearDeviceCacheButton_OnClick(
         object sender,
         RoutedEventArgs eventArgs)
     {
