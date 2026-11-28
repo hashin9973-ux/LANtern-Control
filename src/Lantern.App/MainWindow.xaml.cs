@@ -670,21 +670,34 @@ public partial class MainWindow : Window
             UpdateKnownDeviceHints();
             await engine.StartAsync(selected, CancellationToken.None);
             controlStartedAt = DateTimeOffset.UtcNow;
-            TrafficChart.Samples = trafficHistory.Samples;
+            if (IsDashboardLoaded)
+            {
+                TrafficChart.Samples = trafficHistory.Samples;
+            }
             RefreshDevices(null, EventArgs.Empty);
             await SaveSettingsIfDirtyAsync();
             SetStatus("Control active", true);
-            refreshTimer.Start();
+            if (IsDashboardLoaded)
+            {
+                refreshTimer.Start();
+            }
+            else
+            {
+                refreshTimer.Stop();
+            }
             StartNetworkAutomationPoll();
         }
         catch (Exception exception)
         {
             SetStatus(exception.Message, false);
-            MessageBox.Show(
-                exception.Message,
-                "Could not start LAN control",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
+            if (IsDashboardLoaded)
+            {
+                MessageBox.Show(
+                    exception.Message,
+                    "Could not start LAN control",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
         }
         finally
         {
@@ -741,8 +754,11 @@ public partial class MainWindow : Window
         {
             settings.AutoScanEnabled = previousEnabled;
             settings.AutoScanIntervalSeconds = previousInterval;
-            AutoScanCheckBox.IsChecked = previousEnabled;
-            AutoScanIntervalTextBox.Text = previousInterval.ToString();
+            if (IsDashboardLoaded)
+            {
+                AutoScanCheckBox.IsChecked = previousEnabled;
+                AutoScanIntervalTextBox.Text = previousInterval.ToString();
+            }
             ConfigureAutoScanTimer();
             SetStatus(exception.Message, false);
         }
@@ -782,7 +798,10 @@ public partial class MainWindow : Window
         {
             settings.AutoScanIntervalSeconds = previousInterval;
             settingsDirty = previousDirtyState;
-            AutoScanIntervalTextBox.Text = previousInterval.ToString();
+            if (IsDashboardLoaded)
+            {
+                AutoScanIntervalTextBox.Text = previousInterval.ToString();
+            }
             SetStatus(exception.Message, false);
         }
     }
@@ -898,7 +917,10 @@ public partial class MainWindow : Window
                 await ApplyNetworkAutomationPauseStateAsync(device.MacKey, paused: false);
             }
 
-            NetworkAutomationKeywordTextBox.Clear();
+            if (IsDashboardLoaded)
+            {
+                NetworkAutomationKeywordTextBox.Clear();
+            }
             SetNetworkAutomationStatus(engine.IsRunning
                 ? $"Added for {device.DisplayName}. Scanning visible Wi-Fi networks now."
                 : $"Added for {device.DisplayName}. It will pause only while control is active and the Wi-Fi name matches.");
@@ -1025,7 +1047,10 @@ public partial class MainWindow : Window
             exception is IOException or UnauthorizedAccessException)
         {
             settings.NetworkAutomationPollIntervalSeconds = previous;
-            NetworkAutomationPollIntervalTextBox.Text = previous.ToString();
+            if (IsDashboardLoaded)
+            {
+                NetworkAutomationPollIntervalTextBox.Text = previous.ToString();
+            }
             SetNetworkAutomationStatus($"Could not save poll interval: {exception.Message}");
         }
     }
@@ -1286,15 +1311,20 @@ public partial class MainWindow : Window
         try
         {
             var scriptContent = await File.ReadAllTextAsync(selectedPath);
-            SetScriptEditorText(scriptContent);
             settings.ScriptAutomationPath = selectedPath;
             settings.ScriptAutomationEnabled = false;
-            ScriptPathTextBox.Text = selectedPath;
-            ScriptAutomationCheckBox.IsChecked = false;
             ConfigureScriptAutomationTimer();
             await settingsStore.SaveAsync(settings);
             settingsDirty = false;
-            UpdateScriptAutomationControls();
+            lastScriptEditorContent = scriptContent;
+            lastScriptEditorDirty = false;
+            if (IsDashboardLoaded)
+            {
+                SetScriptEditorText(scriptContent);
+                ScriptPathTextBox.Text = selectedPath;
+                ScriptAutomationCheckBox.IsChecked = false;
+                UpdateScriptAutomationControls();
+            }
             SetScriptAutomationStatus("Script opened. Review and save your edits before running or scheduling it.");
         }
         catch (Exception exception)
@@ -1449,8 +1479,21 @@ public partial class MainWindow : Window
             settings.ScriptAutomationPath = fullPath;
             await settingsStore.SaveAsync(settings);
             settingsDirty = false;
-            ScriptPathTextBox.Text = fullPath;
-            scriptEditorDirty = false;
+            if (IsDashboardLoaded)
+            {
+                ScriptPathTextBox.Text = fullPath;
+                scriptEditorDirty = !string.Equals(
+                    ScriptEditorTextBox.Text,
+                    scriptContent,
+                    StringComparison.Ordinal);
+            }
+            else if (string.Equals(
+                         lastScriptEditorContent,
+                         scriptContent,
+                         StringComparison.Ordinal))
+            {
+                lastScriptEditorDirty = false;
+            }
             SetScriptAutomationStatus($"Saved {Path.GetFileName(fullPath)}.");
             UpdateScriptAutomationControls();
             return true;
@@ -1475,10 +1518,23 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (enabled && !await SaveScriptEditorAsync())
+        if (enabled)
         {
-            ScriptAutomationCheckBox.IsChecked = false;
-            return;
+            var saved = await SaveScriptEditorAsync();
+            if (!saved)
+            {
+                if (IsDashboardLoaded)
+                {
+                    ScriptAutomationCheckBox.IsChecked = false;
+                }
+                return;
+            }
+
+            // A detached dashboard must not continue into a hidden confirmation prompt.
+            if (!IsDashboardLoaded)
+            {
+                return;
+            }
         }
 
         if (enabled &&
@@ -1506,6 +1562,10 @@ public partial class MainWindow : Window
                 "Confirm script automation",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Warning);
+            if (!IsDashboardLoaded)
+            {
+                return;
+            }
             if (choice != MessageBoxResult.Yes)
             {
                 ScriptAutomationCheckBox.IsChecked = false;
@@ -1536,8 +1596,11 @@ public partial class MainWindow : Window
         {
             settings.ScriptAutomationEnabled = previousEnabled;
             settings.ScriptAutomationIntervalSeconds = previousInterval;
-            ScriptAutomationCheckBox.IsChecked = previousEnabled;
-            ScriptAutomationIntervalTextBox.Text = previousInterval.ToString();
+            if (IsDashboardLoaded)
+            {
+                ScriptAutomationCheckBox.IsChecked = previousEnabled;
+                ScriptAutomationIntervalTextBox.Text = previousInterval.ToString();
+            }
             ConfigureScriptAutomationTimer();
             UpdateScriptAutomationControls();
             SetScriptAutomationStatus($"Could not save script schedule: {exception.Message}");
@@ -1578,7 +1641,10 @@ public partial class MainWindow : Window
             exception is IOException or UnauthorizedAccessException)
         {
             settings.ScriptAutomationIntervalSeconds = previousInterval;
-            ScriptAutomationIntervalTextBox.Text = previousInterval.ToString();
+            if (IsDashboardLoaded)
+            {
+                ScriptAutomationIntervalTextBox.Text = previousInterval.ToString();
+            }
             SetScriptAutomationStatus($"Could not save script interval: {exception.Message}");
         }
     }
@@ -2203,7 +2269,10 @@ public partial class MainWindow : Window
 
         DomainRuleValidationText.Visibility = Visibility.Collapsed;
         await AddDomainBlockAsync(device.MacKey, domain);
-        DomainRuleInput.Clear();
+        if (IsDashboardLoaded)
+        {
+            DomainRuleInput.Clear();
+        }
     }
 
     internal async void ApplyDomainPresetButton_OnClick(object sender, RoutedEventArgs eventArgs)
