@@ -18,6 +18,10 @@ using System.Windows.Threading;
 using Lantern.App.Controls;
 using Lantern.App.Services;
 using Lantern.App.ViewModels;
+using Lantern.App.Views;
+using DrawingIcon = System.Drawing.Icon;
+using DrawingSystemIcons = System.Drawing.SystemIcons;
+using Forms = System.Windows.Forms;
 using Lantern.Core.Control;
 using Lantern.Core.Devices;
 using Lantern.Core.Networking;
@@ -87,6 +91,23 @@ public partial class MainWindow : Window
     private int pendingWebsiteActivityCount;
     private int websiteActivityDrainScheduled;
     private bool closeAfterStop;
+    private DashboardView? dashboard;
+    private Forms.NotifyIcon? trayIcon;
+    private Forms.ContextMenuStrip? trayMenu;
+    private DrawingIcon? trayIconImage;
+    private bool exitRequested;
+    private bool settingsLoaded;
+    private bool startupSettingsNormalized;
+    private bool dashboardInitializationInProgress;
+    private bool hideAfterInitialization;
+    private bool updateCheckStarted;
+    private bool lastScriptEditorDirty;
+    private AdapterProfile? selectedAdapter;
+    private string? lastScriptEditorContent;
+    private string? lastScriptAutomationStatus;
+    private string? lastNetworkAutomationStatus;
+    private string? lastDetailStatus;
+    private bool? lastStatusActive;
     private bool settingsDirty;
 
     private sealed class PendingWebsiteActivity(DeviceDomainObservedEventArgs initial)
@@ -104,6 +125,261 @@ public partial class MainWindow : Window
         }
     }
 
+
+    private bool IsDashboardLoaded => dashboard is not null;
+
+    private object? FindDashboardElement(string name) => dashboard?.FindName(name);
+
+    private dynamic SidebarVersionText => FindDashboardElement(nameof(SidebarVersionText))!;
+    private dynamic MainScrollViewer => FindDashboardElement(nameof(MainScrollViewer))!;
+    private dynamic OverviewSection => FindDashboardElement(nameof(OverviewSection))!;
+    private dynamic StatusDot => FindDashboardElement(nameof(StatusDot))!;
+    private dynamic TopStatusText => FindDashboardElement(nameof(TopStatusText))!;
+    private dynamic AdapterStrip => FindDashboardElement(nameof(AdapterStrip))!;
+    private dynamic AdapterSelector => FindDashboardElement(nameof(AdapterSelector))!;
+    private dynamic LocalIpText => FindDashboardElement(nameof(LocalIpText))!;
+    private dynamic GatewayIpText => FindDashboardElement(nameof(GatewayIpText))!;
+    private dynamic StartButton => FindDashboardElement(nameof(StartButton))!;
+    private dynamic ScanButton => FindDashboardElement(nameof(ScanButton))!;
+    private dynamic AutoScanCheckBox => FindDashboardElement(nameof(AutoScanCheckBox))!;
+    private dynamic AutoScanIntervalTextBox => FindDashboardElement(nameof(AutoScanIntervalTextBox))!;
+    private dynamic StopButton => FindDashboardElement(nameof(StopButton))!;
+    private dynamic MetricsPanel => FindDashboardElement(nameof(MetricsPanel))!;
+    private dynamic ConnectedDevicesMetric => FindDashboardElement(nameof(ConnectedDevicesMetric))!;
+    private dynamic DownloadMetric => FindDashboardElement(nameof(DownloadMetric))!;
+    private dynamic UploadMetric => FindDashboardElement(nameof(UploadMetric))!;
+    private dynamic ActiveRulesMetric => FindDashboardElement(nameof(ActiveRulesMetric))!;
+    private dynamic ActivitySection => FindDashboardElement(nameof(ActivitySection))!;
+    private dynamic TrafficChart => FindDashboardElement(nameof(TrafficChart))!;
+    private dynamic ChartDeviceSummaryText => FindDashboardElement(nameof(ChartDeviceSummaryText))!;
+    private dynamic WebsiteActivitySection => FindDashboardElement(nameof(WebsiteActivitySection))!;
+    private dynamic WebsiteActivityCountText => FindDashboardElement(nameof(WebsiteActivityCountText))!;
+    private dynamic WebsiteActivityEmptyState => FindDashboardElement(nameof(WebsiteActivityEmptyState))!;
+    private dynamic DomainRulesSection => FindDashboardElement(nameof(DomainRulesSection))!;
+    private dynamic DomainRuleCountText => FindDashboardElement(nameof(DomainRuleCountText))!;
+    private dynamic DomainPresetDeviceSelector => FindDashboardElement(nameof(DomainPresetDeviceSelector))!;
+    private dynamic DomainPresetSelector => FindDashboardElement(nameof(DomainPresetSelector))!;
+    private dynamic DomainPresetValidationText => FindDashboardElement(nameof(DomainPresetValidationText))!;
+    private dynamic DomainRuleDeviceSelector => FindDashboardElement(nameof(DomainRuleDeviceSelector))!;
+    private dynamic DomainRuleInput => FindDashboardElement(nameof(DomainRuleInput))!;
+    private dynamic DomainRuleValidationText => FindDashboardElement(nameof(DomainRuleValidationText))!;
+    private dynamic DomainRulesEmptyState => FindDashboardElement(nameof(DomainRulesEmptyState))!;
+    private dynamic DeviceSection => FindDashboardElement(nameof(DeviceSection))!;
+    private dynamic ClearDeviceCacheButton => FindDashboardElement(nameof(ClearDeviceCacheButton))!;
+    private dynamic DeviceCountText => FindDashboardElement(nameof(DeviceCountText))!;
+    private dynamic DeviceMacAddress => FindDashboardElement(nameof(DeviceMacAddress))!;
+    private dynamic EmptyState => FindDashboardElement(nameof(EmptyState))!;
+    private dynamic DetailStatusText => FindDashboardElement(nameof(DetailStatusText))!;
+    private dynamic PacketHealthText => FindDashboardElement(nameof(PacketHealthText))!;
+    private dynamic UptimeText => FindDashboardElement(nameof(UptimeText))!;
+    private dynamic ScriptAutomationSection => FindDashboardElement(nameof(ScriptAutomationSection))!;
+    private dynamic ScriptPathTextBox => FindDashboardElement(nameof(ScriptPathTextBox))!;
+    private dynamic BrowseScriptButton => FindDashboardElement(nameof(BrowseScriptButton))!;
+    private dynamic SaveScriptButton => FindDashboardElement(nameof(SaveScriptButton))!;
+    private dynamic SaveScriptAsButton => FindDashboardElement(nameof(SaveScriptAsButton))!;
+    private dynamic RunScriptNowButton => FindDashboardElement(nameof(RunScriptNowButton))!;
+    private dynamic ScriptAutomationCheckBox => FindDashboardElement(nameof(ScriptAutomationCheckBox))!;
+    private dynamic ScriptAutomationIntervalTextBox => FindDashboardElement(nameof(ScriptAutomationIntervalTextBox))!;
+    private dynamic ScriptEditorTextBox => FindDashboardElement(nameof(ScriptEditorTextBox))!;
+    private dynamic ScriptAutomationStatusText => FindDashboardElement(nameof(ScriptAutomationStatusText))!;
+    private dynamic NetworkAutomationSection => FindDashboardElement(nameof(NetworkAutomationSection))!;
+    private dynamic NetworkAutomationDeviceSelector => FindDashboardElement(nameof(NetworkAutomationDeviceSelector))!;
+    private dynamic NetworkAutomationKeywordTextBox => FindDashboardElement(nameof(NetworkAutomationKeywordTextBox))!;
+    private dynamic NetworkAutomationPollIntervalTextBox => FindDashboardElement(nameof(NetworkAutomationPollIntervalTextBox))!;
+    private dynamic NetworkAutomationStatusText => FindDashboardElement(nameof(NetworkAutomationStatusText))!;
+
+    private void CreateDashboardView()
+    {
+        if (dashboard is not null)
+        {
+            return;
+        }
+
+        dashboard = new DashboardView(this);
+        DashboardHost.Content = dashboard;
+        SidebarVersionText.Text = VersionText;
+        DomainPresetSelector.ItemsSource = DomainPresets;
+
+        if (lastDetailStatus is not null)
+        {
+            SetStatus(lastDetailStatus, lastStatusActive);
+        }
+        if (lastScriptAutomationStatus is not null)
+        {
+            ScriptAutomationStatusText.Text = lastScriptAutomationStatus;
+        }
+        if (lastNetworkAutomationStatus is not null)
+        {
+            NetworkAutomationStatusText.Text = lastNetworkAutomationStatus;
+        }
+    }
+
+    private void ReleaseDashboardView()
+    {
+        if (dashboard is null)
+        {
+            return;
+        }
+
+        lastScriptEditorContent = ScriptEditorTextBox.Text;
+        lastScriptEditorDirty = scriptEditorDirty;
+        lastScriptAutomationStatus = ScriptAutomationStatusText.Text;
+        lastNetworkAutomationStatus = NetworkAutomationStatusText.Text;
+        lastDetailStatus = DetailStatusText.Text;
+        DashboardHost.Content = null;
+        dashboard = null;
+        refreshTimer.Stop();
+
+        _ = Dispatcher.BeginInvoke(
+            new Action(() => GC.Collect(2, GCCollectionMode.Optimized, blocking: false)),
+            DispatcherPriority.ApplicationIdle);
+    }
+
+    private void InitializeTrayIcon()
+    {
+        if (trayIcon is not null)
+        {
+            return;
+        }
+
+        var processPath = Environment.ProcessPath;
+        if (!string.IsNullOrWhiteSpace(processPath) && File.Exists(processPath))
+        {
+            try
+            {
+                trayIconImage = DrawingIcon.ExtractAssociatedIcon(processPath);
+            }
+            catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException)
+            {
+                trayIconImage = null;
+            }
+        }
+
+        trayMenu = new Forms.ContextMenuStrip();
+        var openItem = new Forms.ToolStripMenuItem("Open LANtern Control");
+        openItem.Click += (_, _) => DispatchToUi(ShowDashboard);
+        var exitItem = new Forms.ToolStripMenuItem("Exit");
+        exitItem.Click += (_, _) => DispatchToUi(RequestApplicationExit);
+        trayMenu.Items.Add(openItem);
+        trayMenu.Items.Add(new Forms.ToolStripSeparator());
+        trayMenu.Items.Add(exitItem);
+
+        trayIcon = new Forms.NotifyIcon
+        {
+            Text = "LANtern Control",
+            Icon = trayIconImage ?? DrawingSystemIcons.Application,
+            ContextMenuStrip = trayMenu,
+            Visible = true,
+        };
+        trayIcon.DoubleClick += (_, _) => DispatchToUi(ShowDashboard);
+    }
+
+    private void DispatchToUi(Action action)
+    {
+        if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+        {
+            return;
+        }
+
+        _ = Dispatcher.BeginInvoke(action, DispatcherPriority.Normal);
+    }
+
+    private void MinimizeToTray()
+    {
+        if (exitRequested)
+        {
+            return;
+        }
+
+        ShowInTaskbar = false;
+        Hide();
+        if (dashboardInitializationInProgress)
+        {
+            hideAfterInitialization = true;
+            return;
+        }
+
+        ReleaseDashboardView();
+    }
+
+    private void ShowDashboard()
+    {
+        if (exitRequested)
+        {
+            return;
+        }
+
+        var requiresInitialization = dashboard is null;
+        hideAfterInitialization = false;
+        CreateDashboardView();
+        ShowInTaskbar = true;
+        if (!IsVisible)
+        {
+            Show();
+        }
+        WindowState = WindowState.Normal;
+        Activate();
+
+        if (requiresInitialization)
+        {
+            _ = InitializeDashboardAsync();
+        }
+    }
+
+    private void RequestApplicationExit()
+    {
+        if (exitRequested)
+        {
+            return;
+        }
+
+        exitRequested = true;
+        Close();
+    }
+
+    private void MainWindow_OnClosed(object? sender, EventArgs eventArgs)
+    {
+        if (trayIcon is not null)
+        {
+            trayIcon.Visible = false;
+            trayIcon.Dispose();
+            trayIcon = null;
+        }
+
+        trayMenu?.Dispose();
+        trayMenu = null;
+        trayIconImage?.Dispose();
+        trayIconImage = null;
+        Application.Current.Shutdown();
+    }
+
+    private void SetScriptAutomationStatus(string value)
+    {
+        lastScriptAutomationStatus = value;
+        if (IsDashboardLoaded)
+        {
+            ScriptAutomationStatusText.Text = value;
+        }
+    }
+
+    private void SetNetworkAutomationStatus(string value)
+    {
+        lastNetworkAutomationStatus = value;
+        if (IsDashboardLoaded)
+        {
+            NetworkAutomationStatusText.Text = value;
+        }
+    }
+
+    private void SetDetailStatus(string value)
+    {
+        lastDetailStatus = value;
+        if (IsDashboardLoaded)
+        {
+            DetailStatusText.Text = value;
+        }
+    }
+
     public string VersionText =>
         $"v{(typeof(MainWindow).Assembly.GetName().Version ?? new Version()).ToString(3)}";
 
@@ -111,8 +387,9 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         DataContext = this;
-        SidebarVersionText.Text = VersionText;
-        DomainPresetSelector.ItemsSource = DomainPresets;
+        CreateDashboardView();
+        InitializeTrayIcon();
+        Closed += MainWindow_OnClosed;
         engine = new PcapLanEngine(registry, policy);
         deviceAutomationPipeServer = new DeviceAutomationPipeServer(HandleDeviceAutomationRequestAsync);
         engine.StatusChanged += Engine_OnStatusChanged;
@@ -188,7 +465,24 @@ public partial class MainWindow : Window
 
     private async void MainWindow_OnLoaded(object sender, RoutedEventArgs eventArgs)
     {
-        settings = await settingsStore.LoadAsync();
+        await InitializeDashboardAsync();
+    }
+
+    private async Task InitializeDashboardAsync()
+    {
+        if (dashboardInitializationInProgress || dashboard is null)
+        {
+            return;
+        }
+
+        dashboardInitializationInProgress = true;
+        try
+        {
+        if (!settingsLoaded)
+        {
+            settings = await settingsStore.LoadAsync();
+            settingsLoaded = true;
+        }
         if (settings.AutoScanIntervalSeconds is < MinimumAutoScanIntervalSeconds or > MaximumAutoScanIntervalSeconds)
         {
             settings.AutoScanIntervalSeconds = MinimumAutoScanIntervalSeconds;
@@ -200,8 +494,13 @@ public partial class MainWindow : Window
         ScriptPathTextBox.Text = string.IsNullOrWhiteSpace(settings.ScriptAutomationPath)
             ? "(not saved yet)"
             : settings.ScriptAutomationPath;
-        SetScriptEditorText(DefaultScriptTemplate);
-        if (!string.IsNullOrWhiteSpace(settings.ScriptAutomationPath) &&
+        var restoredEditorContent = lastScriptEditorContent;
+        SetScriptEditorText(restoredEditorContent ?? DefaultScriptTemplate);
+        scriptEditorDirty = lastScriptEditorDirty;
+        lastScriptEditorContent = null;
+        lastScriptEditorDirty = false;
+        if (restoredEditorContent is null &&
+            !string.IsNullOrWhiteSpace(settings.ScriptAutomationPath) &&
             File.Exists(settings.ScriptAutomationPath))
         {
             try
@@ -210,8 +509,7 @@ public partial class MainWindow : Window
             }
             catch (Exception exception)
             {
-                ScriptAutomationStatusText.Text =
-                    $"Could not load the selected script into the editor: {exception.Message}";
+                SetScriptAutomationStatus($"Could not load the selected script into the editor: {exception.Message}");
             }
         }
 
@@ -223,15 +521,18 @@ public partial class MainWindow : Window
             (string.IsNullOrWhiteSpace(settings.ScriptAutomationPath) ||
              !File.Exists(settings.ScriptAutomationPath)))
         {
-            ScriptAutomationStatusText.Text =
-                "Scheduled execution is enabled, but the selected script is missing. Browse to a valid .ps1 file.";
+            SetScriptAutomationStatus("Scheduled execution is enabled, but the selected script is missing. Browse to a valid .ps1 file.");
         }
 
         LoadDomainRulesFromSettings();
-        if (NormalizeNetworkAutomationPauseStateOnStartup())
+        if (!startupSettingsNormalized)
         {
-            await settingsStore.SaveAsync(settings);
-            settingsDirty = false;
+            if (NormalizeNetworkAutomationPauseStateOnStartup())
+            {
+                await settingsStore.SaveAsync(settings);
+                settingsDirty = false;
+            }
+            startupSettingsNormalized = true;
         }
 
         NetworkAutomationPollIntervalTextBox.Text = settings.NetworkAutomationPollIntervalSeconds.ToString();
@@ -239,7 +540,13 @@ public partial class MainWindow : Window
         ConfigureNetworkAutomationTimer();
         var adapters = WindowsAdapterService.GetUsableAdapters();
         AdapterSelector.ItemsSource = adapters;
-        AdapterSelector.SelectedIndex = adapters.Count > 0 ? 0 : -1;
+        var preferredAdapterIndex = selectedAdapter is null
+            ? -1
+            : adapters.ToList().FindIndex(adapter => adapter.Id.Equals(selectedAdapter.Id, StringComparison.OrdinalIgnoreCase));
+        AdapterSelector.SelectedIndex = preferredAdapterIndex >= 0
+            ? preferredAdapterIndex
+            : adapters.Count > 0 ? 0 : -1;
+        selectedAdapter = AdapterSelector.SelectedItem as AdapterProfile;
         UpdateAdapterSummary();
         if (adapters.Count == 0)
         {
@@ -249,7 +556,34 @@ public partial class MainWindow : Window
 
         UpdateButtons();
         deviceAutomationPipeServer.Start();
-        await CheckForUpdatesAsync();
+        ApplyEngineState(engine.IsRunning, engine.IsHealthy);
+        ScheduleEngineStatusDispatch();
+        if (!pendingWebsiteActivity.IsEmpty)
+        {
+            ScheduleWebsiteActivityDrain();
+        }
+        if (Volatile.Read(ref pendingIdentityAlertMessage) is not null &&
+            Interlocked.Exchange(ref identityAlertDispatchScheduled, 1) == 0)
+        {
+            _ = Dispatcher.BeginInvoke(
+                new Action(DrainIdentityAlertDispatch),
+                DispatcherPriority.Background);
+        }
+        if (!updateCheckStarted)
+        {
+            updateCheckStarted = true;
+            await CheckForUpdatesAsync();
+        }
+        }
+        finally
+        {
+            dashboardInitializationInProgress = false;
+            if (hideAfterInitialization)
+            {
+                hideAfterInitialization = false;
+                ReleaseDashboardView();
+            }
+        }
     }
 
     private async Task CheckForUpdatesAsync()
@@ -272,7 +606,7 @@ public partial class MainWindow : Window
                 UpdatePlatform.WindowsX64);
             await settingsStore.SaveAsync(settings);
             settingsDirty = false;
-            if (available is null)
+            if (available is null || !IsVisible || !IsDashboardLoaded)
             {
                 return;
             }
@@ -304,7 +638,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void StartButton_OnClick(object sender, RoutedEventArgs eventArgs)
+    internal async void StartButton_OnClick(object sender, RoutedEventArgs eventArgs)
     {
         if (startInProgress ||
             stopInProgress ||
@@ -347,12 +681,12 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void StopButton_OnClick(object sender, RoutedEventArgs eventArgs)
+    internal async void StopButton_OnClick(object sender, RoutedEventArgs eventArgs)
     {
         await StopEngineAsync();
     }
 
-    private async void ScanButton_OnClick(object sender, RoutedEventArgs eventArgs)
+    internal async void ScanButton_OnClick(object sender, RoutedEventArgs eventArgs)
     {
         if (AdapterSelector.SelectedItem is AdapterProfile adapter)
         {
@@ -360,7 +694,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void AutoScanCheckBox_OnClick(object sender, RoutedEventArgs eventArgs)
+    internal async void AutoScanCheckBox_OnClick(object sender, RoutedEventArgs eventArgs)
     {
         var enabled = AutoScanCheckBox.IsChecked == true;
         var intervalSeconds = settings.AutoScanIntervalSeconds;
@@ -387,9 +721,9 @@ public partial class MainWindow : Window
             await settingsStore.SaveAsync(settings);
             settingsDirty = false;
             ConfigureAutoScanTimer();
-            DetailStatusText.Text = enabled
+            SetDetailStatus(enabled
                 ? $"Automatic device discovery enabled: the local network is scanned every {settings.AutoScanIntervalSeconds} seconds."
-                : "Automatic device discovery disabled.";
+                : "Automatic device discovery disabled.");
         }
         catch (IOException exception)
         {
@@ -402,7 +736,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void AutoScanIntervalTextBox_OnLostFocus(object sender, RoutedEventArgs eventArgs)
+    internal async void AutoScanIntervalTextBox_OnLostFocus(object sender, RoutedEventArgs eventArgs)
     {
         if (!TryGetAutoScanInterval(out var intervalSeconds))
         {
@@ -429,8 +763,7 @@ public partial class MainWindow : Window
             ConfigureAutoScanTimer();
             if (settings.AutoScanEnabled)
             {
-                DetailStatusText.Text =
-                    $"Automatic device discovery will run every {settings.AutoScanIntervalSeconds} seconds.";
+                SetDetailStatus($"Automatic device discovery will run every {settings.AutoScanIntervalSeconds} seconds.");
             }
         }
         catch (IOException exception)
@@ -467,7 +800,7 @@ public partial class MainWindow : Window
         if (!settings.AutoScanEnabled ||
             scanInProgress ||
             stopInProgress ||
-            AdapterSelector.SelectedItem is not AdapterProfile adapter)
+            selectedAdapter is not AdapterProfile adapter)
         {
             return;
         }
@@ -510,27 +843,25 @@ public partial class MainWindow : Window
         networkAutomationTimer.Start();
     }
 
-    private async void AddNetworkAutomationButton_OnClick(object sender, RoutedEventArgs eventArgs)
+    internal async void AddNetworkAutomationButton_OnClick(object sender, RoutedEventArgs eventArgs)
     {
         if (NetworkAutomationDeviceSelector.SelectedItem is not DeviceViewModel { CanControl: true } device)
         {
-            NetworkAutomationStatusText.Text =
-                "Select a controllable device from the device list first. Inventory-only and protected devices cannot be targets.";
+            SetNetworkAutomationStatus("Select a controllable device from the device list first. Inventory-only and protected devices cannot be targets.");
             return;
         }
 
         var keyword = NetworkAutomationKeywordTextBox.Text.Trim();
         if (keyword.Length is 0 or > 128)
         {
-            NetworkAutomationStatusText.Text = "Enter a network name keyword (1–128 characters).";
+            SetNetworkAutomationStatus("Enter a network name keyword (1–128 characters).");
             return;
         }
 
         if (settings.NetworkKeywordAutomations.Any(automation =>
                 automation.DeviceMacAddress.Equals(device.MacKey, StringComparison.OrdinalIgnoreCase)))
         {
-            NetworkAutomationStatusText.Text =
-                "This device already has a network automation. Delete it before adding a different keyword.";
+            SetNetworkAutomationStatus("This device already has a network automation. Delete it before adding a different keyword.");
             return;
         }
 
@@ -556,9 +887,9 @@ public partial class MainWindow : Window
             }
 
             NetworkAutomationKeywordTextBox.Clear();
-            NetworkAutomationStatusText.Text = engine.IsRunning
+            SetNetworkAutomationStatus(engine.IsRunning
                 ? $"Added for {device.DisplayName}. Scanning visible Wi-Fi networks now."
-                : $"Added for {device.DisplayName}. It will pause only while control is active and the Wi-Fi name matches.";
+                : $"Added for {device.DisplayName}. It will pause only while control is active and the Wi-Fi name matches.");
             ConfigureNetworkAutomationTimer();
             StartNetworkAutomationPoll();
         }
@@ -567,11 +898,11 @@ public partial class MainWindow : Window
         {
             settings.NetworkKeywordAutomations.Remove(automation);
             NetworkKeywordAutomations.Remove(viewModel);
-            NetworkAutomationStatusText.Text = $"Could not save the automation: {exception.Message}";
+            SetNetworkAutomationStatus($"Could not save the automation: {exception.Message}");
         }
     }
 
-    private async void NetworkAutomationEnabledCheckBox_OnClick(object sender, RoutedEventArgs eventArgs)
+    internal async void NetworkAutomationEnabledCheckBox_OnClick(object sender, RoutedEventArgs eventArgs)
     {
         if (sender is not CheckBox { DataContext: NetworkKeywordAutomationViewModel viewModel })
             return;
@@ -597,9 +928,9 @@ public partial class MainWindow : Window
 
             await settingsStore.SaveAsync(settings);
             settingsDirty = false;
-            NetworkAutomationStatusText.Text = automation.Enabled
+            SetNetworkAutomationStatus(automation.Enabled
                 ? $"Automation enabled for {viewModel.DeviceName}."
-                : $"Automation disabled for {viewModel.DeviceName}; the device was unpaused.";
+                : $"Automation disabled for {viewModel.DeviceName}; the device was unpaused.");
             if (automation.Enabled)
             {
                 viewModel.UpdateEvaluationStatus("Checking Wi-Fi on next poll");
@@ -617,11 +948,11 @@ public partial class MainWindow : Window
         {
             viewModel.IsEnabled = !automation.Enabled;
             automation.Enabled = viewModel.IsEnabled;
-            NetworkAutomationStatusText.Text = $"Could not update the automation: {exception.Message}";
+            SetNetworkAutomationStatus($"Could not update the automation: {exception.Message}");
         }
     }
 
-    private async void DeleteNetworkAutomationButton_OnClick(object sender, RoutedEventArgs eventArgs)
+    internal async void DeleteNetworkAutomationButton_OnClick(object sender, RoutedEventArgs eventArgs)
     {
         if (sender is not Button { Tag: NetworkKeywordAutomationViewModel viewModel })
             return;
@@ -644,18 +975,17 @@ public partial class MainWindow : Window
             NetworkKeywordAutomations.Remove(viewModel);
             await settingsStore.SaveAsync(settings);
             settingsDirty = false;
-            NetworkAutomationStatusText.Text =
-                $"Deleted the automation for {viewModel.DeviceName}; the device was unpaused.";
+            SetNetworkAutomationStatus($"Deleted the automation for {viewModel.DeviceName}; the device was unpaused.");
             ConfigureNetworkAutomationTimer();
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            NetworkAutomationStatusText.Text = $"Could not delete the automation: {exception.Message}";
+            SetNetworkAutomationStatus($"Could not delete the automation: {exception.Message}");
         }
     }
 
-    private async void NetworkAutomationPollIntervalTextBox_OnLostFocus(
+    internal async void NetworkAutomationPollIntervalTextBox_OnLostFocus(
         object sender,
         RoutedEventArgs eventArgs)
     {
@@ -664,8 +994,7 @@ public partial class MainWindow : Window
         {
             NetworkAutomationPollIntervalTextBox.Text =
                 settings.NetworkAutomationPollIntervalSeconds.ToString();
-            NetworkAutomationStatusText.Text =
-                $"Poll interval must be between {MinimumNetworkAutomationPollIntervalSeconds} and {MaximumNetworkAutomationPollIntervalSeconds} seconds.";
+            SetNetworkAutomationStatus($"Poll interval must be between {MinimumNetworkAutomationPollIntervalSeconds} and {MaximumNetworkAutomationPollIntervalSeconds} seconds.");
             return;
         }
 
@@ -678,15 +1007,14 @@ public partial class MainWindow : Window
             await settingsStore.SaveAsync(settings);
             settingsDirty = false;
             ConfigureNetworkAutomationTimer();
-            NetworkAutomationStatusText.Text =
-                $"Network automation checks every {intervalSeconds} seconds.";
+            SetNetworkAutomationStatus($"Network automation checks every {intervalSeconds} seconds.");
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException)
         {
             settings.NetworkAutomationPollIntervalSeconds = previous;
             NetworkAutomationPollIntervalTextBox.Text = previous.ToString();
-            NetworkAutomationStatusText.Text = $"Could not save poll interval: {exception.Message}";
+            SetNetworkAutomationStatus($"Could not save poll interval: {exception.Message}");
         }
     }
 
@@ -722,7 +1050,7 @@ public partial class MainWindow : Window
                     UpdateNetworkAutomationEvaluationStatus(automation.Id, "Waiting for control");
                 }
 
-                NetworkAutomationStatusText.Text = "Automations are waiting for Start control; target devices are unpaused.";
+                SetNetworkAutomationStatus("Automations are waiting for Start control; target devices are unpaused.");
                 return;
             }
 
@@ -746,8 +1074,7 @@ public partial class MainWindow : Window
                         "Wi-Fi scan failed — previous device state retained");
                 }
 
-                NetworkAutomationStatusText.Text =
-                    $"Wi-Fi scan failed: {exception.Message}. No device states were changed.";
+                SetNetworkAutomationStatus($"Wi-Fi scan failed: {exception.Message}. No device states were changed.");
                 return;
             }
 
@@ -785,8 +1112,7 @@ public partial class MainWindow : Window
             var scanSummary = visibleSsids.Count == 0
                 ? "No Wi-Fi networks are currently visible."
                 : $"Visible Wi-Fi networks ({visibleSsids.Count}): {string.Join(", ", visibleSsids)}.";
-            NetworkAutomationStatusText.Text =
-                $"{scanSummary} Checked {checkedCount} automation(s): {pausedCount} paused, {unpausedCount} unpaused.";
+            SetNetworkAutomationStatus($"{scanSummary} Checked {checkedCount} automation(s): {pausedCount} paused, {unpausedCount} unpaused.");
         }
         catch (OperationCanceledException) when (networkAutomationCancellation.IsCancellationRequested)
         {
@@ -819,7 +1145,7 @@ public partial class MainWindow : Window
                 }
             }
 
-            NetworkAutomationStatusText.Text = failureStatus;
+            SetNetworkAutomationStatus(failureStatus);
         }
         finally
         {
@@ -924,7 +1250,7 @@ public partial class MainWindow : Window
         return preferences;
     }
 
-    private async void BrowseScriptButton_OnClick(object sender, RoutedEventArgs eventArgs)
+    internal async void BrowseScriptButton_OnClick(object sender, RoutedEventArgs eventArgs)
     {
         if (!ConfirmDiscardUnsavedScriptEdits())
         {
@@ -957,22 +1283,21 @@ public partial class MainWindow : Window
             await settingsStore.SaveAsync(settings);
             settingsDirty = false;
             UpdateScriptAutomationControls();
-            ScriptAutomationStatusText.Text =
-                "Script opened. Review and save your edits before running or scheduling it.";
+            SetScriptAutomationStatus("Script opened. Review and save your edits before running or scheduling it.");
         }
         catch (Exception exception)
         {
-            ScriptAutomationStatusText.Text = $"Could not open script: {exception.Message}";
+            SetScriptAutomationStatus($"Could not open script: {exception.Message}");
             SetStatus(exception.Message, false);
         }
     }
 
-    private async void SaveScriptButton_OnClick(object sender, RoutedEventArgs eventArgs)
+    internal async void SaveScriptButton_OnClick(object sender, RoutedEventArgs eventArgs)
     {
         await SaveScriptEditorAsync();
     }
 
-    private async void SaveScriptAsButton_OnClick(object sender, RoutedEventArgs eventArgs)
+    internal async void SaveScriptAsButton_OnClick(object sender, RoutedEventArgs eventArgs)
     {
         var currentPath = settings.ScriptAutomationPath;
         var initialDirectory = !string.IsNullOrWhiteSpace(currentPath)
@@ -1007,7 +1332,7 @@ public partial class MainWindow : Window
         await SaveScriptEditorAsync(dialog.FileName);
     }
 
-    private void ScriptEditorTextBox_OnTextChanged(
+    internal void ScriptEditorTextBox_OnTextChanged(
         object sender,
         TextChangedEventArgs eventArgs)
     {
@@ -1017,8 +1342,7 @@ public partial class MainWindow : Window
         }
 
         scriptEditorDirty = true;
-        ScriptAutomationStatusText.Text =
-            "Unsaved editor changes. Save the script before relying on a scheduled run.";
+        SetScriptAutomationStatus("Unsaved editor changes. Save the script before relying on a scheduled run.");
         UpdateScriptAutomationControls();
     }
 
@@ -1064,8 +1388,7 @@ public partial class MainWindow : Window
         var scriptContent = ScriptEditorTextBox.Text;
         if (string.IsNullOrWhiteSpace(scriptContent))
         {
-            ScriptAutomationStatusText.Text =
-                "The editor is empty. Add a PowerShell command before saving or running.";
+            SetScriptAutomationStatus("The editor is empty. Add a PowerShell command before saving or running.");
             return false;
         }
 
@@ -1083,14 +1406,14 @@ public partial class MainWindow : Window
                     ".ps1",
                     StringComparison.OrdinalIgnoreCase))
             {
-                ScriptAutomationStatusText.Text = "Scripts must use the .ps1 file extension.";
+                SetScriptAutomationStatus("Scripts must use the .ps1 file extension.");
                 return false;
             }
 
             var directory = Path.GetDirectoryName(fullPath);
             if (string.IsNullOrWhiteSpace(directory))
             {
-                ScriptAutomationStatusText.Text = "Choose a valid location for the script.";
+                SetScriptAutomationStatus("Choose a valid location for the script.");
                 return false;
             }
 
@@ -1116,19 +1439,19 @@ public partial class MainWindow : Window
             settingsDirty = false;
             ScriptPathTextBox.Text = fullPath;
             scriptEditorDirty = false;
-            ScriptAutomationStatusText.Text = $"Saved {Path.GetFileName(fullPath)}.";
+            SetScriptAutomationStatus($"Saved {Path.GetFileName(fullPath)}.");
             UpdateScriptAutomationControls();
             return true;
         }
         catch (Exception exception)
         {
-            ScriptAutomationStatusText.Text = $"Could not save script: {exception.Message}";
+            SetScriptAutomationStatus($"Could not save script: {exception.Message}");
             SetStatus(exception.Message, false);
             return false;
         }
     }
 
-    private async void ScriptAutomationCheckBox_OnClick(
+    internal async void ScriptAutomationCheckBox_OnClick(
         object sender,
         RoutedEventArgs eventArgs)
     {
@@ -1136,8 +1459,7 @@ public partial class MainWindow : Window
         if (enabled && !TryGetScriptAutomationInterval(out _))
         {
             ScriptAutomationCheckBox.IsChecked = false;
-            ScriptAutomationStatusText.Text =
-                "Set an interval from 60 to 3600 seconds before enabling the schedule.";
+            SetScriptAutomationStatus("Set an interval from 60 to 3600 seconds before enabling the schedule.");
             return;
         }
 
@@ -1156,8 +1478,7 @@ public partial class MainWindow : Window
                  StringComparison.OrdinalIgnoreCase)))
         {
             ScriptAutomationCheckBox.IsChecked = false;
-            ScriptAutomationStatusText.Text =
-                "Save a valid .ps1 script before enabling its schedule.";
+            SetScriptAutomationStatus("Save a valid .ps1 script before enabling its schedule.");
             return;
         }
 
@@ -1194,9 +1515,9 @@ public partial class MainWindow : Window
             settingsDirty = false;
             ConfigureScriptAutomationTimer();
             UpdateScriptAutomationControls();
-            ScriptAutomationStatusText.Text = enabled
+            SetScriptAutomationStatus(enabled
                 ? $"Scheduled script enabled. It will next run in {settings.ScriptAutomationIntervalSeconds} seconds."
-                : "Scheduled script disabled.";
+                : "Scheduled script disabled.");
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException)
@@ -1207,11 +1528,11 @@ public partial class MainWindow : Window
             ScriptAutomationIntervalTextBox.Text = previousInterval.ToString();
             ConfigureScriptAutomationTimer();
             UpdateScriptAutomationControls();
-            ScriptAutomationStatusText.Text = $"Could not save script schedule: {exception.Message}";
+            SetScriptAutomationStatus($"Could not save script schedule: {exception.Message}");
         }
     }
 
-    private async void ScriptAutomationIntervalTextBox_OnLostFocus(
+    internal async void ScriptAutomationIntervalTextBox_OnLostFocus(
         object sender,
         RoutedEventArgs eventArgs)
     {
@@ -1219,9 +1540,8 @@ public partial class MainWindow : Window
         {
             ScriptAutomationIntervalTextBox.Text =
                 settings.ScriptAutomationIntervalSeconds.ToString();
-            ScriptAutomationStatusText.Text =
-                $"Script interval must be between {MinimumScriptIntervalSeconds} and " +
-                $"{MaximumScriptIntervalSeconds} seconds.";
+            SetScriptAutomationStatus($"Script interval must be between {MinimumScriptIntervalSeconds} and " +
+                $"{MaximumScriptIntervalSeconds} seconds.");
             return;
         }
 
@@ -1239,8 +1559,7 @@ public partial class MainWindow : Window
             ConfigureScriptAutomationTimer();
             if (settings.ScriptAutomationEnabled)
             {
-                ScriptAutomationStatusText.Text =
-                    $"Scheduled script interval changed to {intervalSeconds} seconds.";
+                SetScriptAutomationStatus($"Scheduled script interval changed to {intervalSeconds} seconds.");
             }
         }
         catch (Exception exception) when (
@@ -1248,7 +1567,7 @@ public partial class MainWindow : Window
         {
             settings.ScriptAutomationIntervalSeconds = previousInterval;
             ScriptAutomationIntervalTextBox.Text = previousInterval.ToString();
-            ScriptAutomationStatusText.Text = $"Could not save script interval: {exception.Message}";
+            SetScriptAutomationStatus($"Could not save script interval: {exception.Message}");
         }
     }
 
@@ -1276,6 +1595,11 @@ public partial class MainWindow : Window
 
     private void UpdateScriptAutomationControls()
     {
+        if (!IsDashboardLoaded)
+        {
+            return;
+        }
+
         RunScriptNowButton.IsEnabled =
             !scriptRunInProgress &&
             !string.IsNullOrWhiteSpace(ScriptEditorTextBox.Text);
@@ -1287,7 +1611,7 @@ public partial class MainWindow : Window
         BrowseScriptButton.IsEnabled = !scriptRunInProgress;
     }
 
-    private async void RunScriptNowButton_OnClick(
+    internal async void RunScriptNowButton_OnClick(
         object sender,
         RoutedEventArgs eventArgs)
     {
@@ -1315,16 +1639,14 @@ public partial class MainWindow : Window
     {
         if (scriptRunInProgress)
         {
-            ScriptAutomationStatusText.Text =
-                "Skipped: the previous script run has not finished.";
+            SetScriptAutomationStatus("Skipped: the previous script run has not finished.");
             return Task.CompletedTask;
         }
 
         var scriptPath = settings.ScriptAutomationPath;
         if (string.IsNullOrWhiteSpace(scriptPath) || !File.Exists(scriptPath))
         {
-            ScriptAutomationStatusText.Text =
-                "The selected script is missing. Browse to a valid .ps1 file.";
+            SetScriptAutomationStatus("The selected script is missing. Browse to a valid .ps1 file.");
             return Task.CompletedTask;
         }
 
@@ -1338,9 +1660,9 @@ public partial class MainWindow : Window
     private async Task RunSelectedScriptCoreAsync(string scriptPath, bool isScheduled)
     {
         var startedAt = DateTimeOffset.Now;
-        ScriptAutomationStatusText.Text = isScheduled
+        SetScriptAutomationStatus(isScheduled
             ? $"Scheduled script running — started {startedAt:HH:mm:ss}."
-            : $"Script running — started {startedAt:HH:mm:ss}.";
+            : $"Script running — started {startedAt:HH:mm:ss}.");
         try
         {
             var result = await scriptRunner.RunAsync(
@@ -1348,13 +1670,11 @@ public partial class MainWindow : Window
                 scriptRunCancellation.Token);
             if (result.TimedOut)
             {
-                ScriptAutomationStatusText.Text =
-                    $"Script timed out after {PowerShellScriptRunner.MaximumRunTime.TotalMinutes:0} minutes.";
+                SetScriptAutomationStatus($"Script timed out after {PowerShellScriptRunner.MaximumRunTime.TotalMinutes:0} minutes.");
             }
             else if (result.Succeeded)
             {
-                ScriptAutomationStatusText.Text =
-                    $"Script completed successfully at {DateTimeOffset.Now:HH:mm:ss}.";
+                SetScriptAutomationStatus($"Script completed successfully at {DateTimeOffset.Now:HH:mm:ss}.");
             }
             else
             {
@@ -1367,19 +1687,18 @@ public partial class MainWindow : Window
                     detail = detail[^240..];
                 }
 
-                ScriptAutomationStatusText.Text =
-                    string.IsNullOrWhiteSpace(detail)
+                SetScriptAutomationStatus(string.IsNullOrWhiteSpace(detail)
                         ? $"Script failed with exit code {result.ExitCode}."
-                        : $"Script failed with exit code {result.ExitCode}: {detail}";
+                        : $"Script failed with exit code {result.ExitCode}: {detail}");
             }
         }
         catch (OperationCanceledException) when (scriptRunCancellation.IsCancellationRequested)
         {
-            ScriptAutomationStatusText.Text = "Script execution cancelled because LANtern is closing.";
+            SetScriptAutomationStatus("Script execution cancelled because LANtern is closing.");
         }
         catch (Exception exception)
         {
-            ScriptAutomationStatusText.Text = $"Script could not run: {exception.Message}";
+            SetScriptAutomationStatus($"Script could not run: {exception.Message}");
         }
         finally
         {
@@ -1421,7 +1740,7 @@ public partial class MainWindow : Window
         return operation.Task.Unwrap();
     }
 
-    private void CopyAutomationScriptButton_OnClick(
+    internal void CopyAutomationScriptButton_OnClick(
         object sender,
         RoutedEventArgs eventArgs)
     {
@@ -1443,7 +1762,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void DeviceGrid_OnLoadingRow(object? sender, DataGridRowEventArgs eventArgs)
+    internal void DeviceGrid_OnLoadingRow(object? sender, DataGridRowEventArgs eventArgs)
     {
         if (eventArgs.Row.Item is DeviceViewModel device)
         {
@@ -1576,7 +1895,7 @@ public partial class MainWindow : Window
                 status = $"Automatic device discovery completed ({settings.AutoScanIntervalSeconds}-second interval). {status}";
             }
 
-            DetailStatusText.Text = status;
+            SetDetailStatus(status);
             SetStatus(status, true);
         }
         catch (Exception exception)
@@ -1590,7 +1909,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void ClearDeviceCacheButton_OnClick(
+    internal async void ClearDeviceCacheButton_OnClick(
         object sender,
         RoutedEventArgs eventArgs)
     {
@@ -1608,7 +1927,7 @@ public partial class MainWindow : Window
             .ToArray();
         if (offlineDevices.Length == 0)
         {
-            DetailStatusText.Text = "No offline device cache entries to clear.";
+            SetDetailStatus("No offline device cache entries to clear.");
             return;
         }
 
@@ -1679,10 +1998,10 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ClearActivityButton_OnClick(object sender, RoutedEventArgs eventArgs)
+    internal void ClearActivityButton_OnClick(object sender, RoutedEventArgs eventArgs)
     {
         ClearObservedActivity();
-        DetailStatusText.Text = "Website activity cleared from this session.";
+        SetDetailStatus("Website activity cleared from this session.");
     }
 
     private void ClearObservedActivity()
@@ -1713,6 +2032,11 @@ public partial class MainWindow : Window
 
     private void ScheduleWebsiteActivityDrain()
     {
+        if (!IsDashboardLoaded)
+        {
+            return;
+        }
+
         if (Interlocked.Exchange(ref websiteActivityDrainScheduled, 1) == 0)
         {
             _ = Dispatcher.BeginInvoke(
@@ -1723,6 +2047,12 @@ public partial class MainWindow : Window
 
     private void DrainWebsiteActivity()
     {
+        if (!IsDashboardLoaded)
+        {
+            Interlocked.Exchange(ref websiteActivityDrainScheduled, 0);
+            return;
+        }
+
         var aggregates = new Dictionary<string, PendingWebsiteActivity>(
             StringComparer.OrdinalIgnoreCase);
         for (var index = 0;
@@ -1819,7 +2149,7 @@ public partial class MainWindow : Window
 
     }
 
-    private async void BlockVisitedDomainButton_OnClick(
+    internal async void BlockVisitedDomainButton_OnClick(
         object sender,
         RoutedEventArgs eventArgs)
     {
@@ -1829,7 +2159,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void AddDomainRuleButton_OnClick(object sender, RoutedEventArgs eventArgs)
+    internal async void AddDomainRuleButton_OnClick(object sender, RoutedEventArgs eventArgs)
     {
         if (DomainRuleDeviceSelector.SelectedItem is not DeviceViewModel { CanControl: true } device)
         {
@@ -1856,7 +2186,7 @@ public partial class MainWindow : Window
         DomainRuleInput.Clear();
     }
 
-    private async void ApplyDomainPresetButton_OnClick(object sender, RoutedEventArgs eventArgs)
+    internal async void ApplyDomainPresetButton_OnClick(object sender, RoutedEventArgs eventArgs)
     {
         if (DomainPresetDeviceSelector.SelectedItem is not DeviceViewModel { CanControl: true } device)
         {
@@ -1893,7 +2223,7 @@ public partial class MainWindow : Window
             "Reconnect the app so existing sessions close.");
     }
 
-    private async void RemoveDomainRuleButton_OnClick(object sender, RoutedEventArgs eventArgs)
+    internal async void RemoveDomainRuleButton_OnClick(object sender, RoutedEventArgs eventArgs)
     {
         if (sender is Button { Tag: DomainRuleViewModel rule })
         {
@@ -1901,7 +2231,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void RemoveDomainPresetButton_OnClick(object sender, RoutedEventArgs eventArgs)
+    internal async void RemoveDomainPresetButton_OnClick(object sender, RoutedEventArgs eventArgs)
     {
         if (sender is Button { Tag: DomainPresetRuleViewModel preset })
         {
@@ -2013,11 +2343,11 @@ public partial class MainWindow : Window
             await settingsStore.SaveAsync(settings);
             settingsDirty = false;
             RefreshDomainRulesState();
-            DetailStatusText.Text = status;
+            SetDetailStatus(status);
         }
         catch (IOException exception)
         {
-            DetailStatusText.Text = exception.Message;
+            SetDetailStatus(exception.Message);
         }
     }
 
@@ -2101,6 +2431,11 @@ public partial class MainWindow : Window
 
     private void RefreshWebsiteActivityState()
     {
+        if (!IsDashboardLoaded)
+        {
+            return;
+        }
+
         WebsiteActivityEmptyState.Visibility = DeviceActivityGroups.Count == 0
             ? Visibility.Visible
             : Visibility.Collapsed;
@@ -2186,23 +2521,27 @@ public partial class MainWindow : Window
             }
         }
 
-        if (DomainRuleDeviceSelector.SelectedItem is null && DomainRuleDevices.Count > 0)
+        if (IsDashboardLoaded)
         {
-            DomainRuleDeviceSelector.SelectedIndex = 0;
-        }
+            if (DomainRuleDeviceSelector.SelectedItem is null && DomainRuleDevices.Count > 0)
+            {
+                DomainRuleDeviceSelector.SelectedIndex = 0;
+            }
 
-        if (DomainPresetDeviceSelector.SelectedItem is null && DomainRuleDevices.Count > 0)
-        {
-            DomainPresetDeviceSelector.SelectedIndex = 0;
-        }
+            if (DomainPresetDeviceSelector.SelectedItem is null && DomainRuleDevices.Count > 0)
+            {
+                DomainPresetDeviceSelector.SelectedIndex = 0;
+            }
 
-        CollectionViewSource.GetDefaultView(DomainRuleDevices).Refresh();
-        CollectionViewSource.GetDefaultView(DomainPresetRules).Refresh();
-        CollectionViewSource.GetDefaultView(DomainRules).Refresh();
+            CollectionViewSource.GetDefaultView(DomainRuleDevices).Refresh();
+            CollectionViewSource.GetDefaultView(DomainPresetRules).Refresh();
+            CollectionViewSource.GetDefaultView(DomainRules).Refresh();
+        }
     }
 
-    private void AdapterSelector_OnSelectionChanged(object sender, SelectionChangedEventArgs eventArgs)
+    internal void AdapterSelector_OnSelectionChanged(object sender, SelectionChangedEventArgs eventArgs)
     {
+        selectedAdapter = AdapterSelector.SelectedItem as AdapterProfile;
         UpdateAdapterSummary();
         UpdateButtons();
     }
@@ -2225,7 +2564,10 @@ public partial class MainWindow : Window
             RefreshDevices(null, EventArgs.Empty);
             await SaveSettingsIfDirtyAsync();
             controlStartedAt = null;
-            UptimeText.Text = "Idle";
+            if (IsDashboardLoaded)
+            {
+                UptimeText.Text = "Idle";
+            }
             SetStatus("Stopped safely", null);
         }
         finally
@@ -2237,11 +2579,11 @@ public partial class MainWindow : Window
 
     private void RefreshDevices(object? sender, EventArgs eventArgs)
     {
-        var activeProfile = AdapterSelector.SelectedItem as AdapterProfile;
+        var activeProfile = selectedAdapter;
         var now = DateTimeOffset.UtcNow;
         var view = CollectionViewSource.GetDefaultView(Devices);
         var editableView = view as IEditableCollectionView;
-        var canMutateView = DeviceListRefreshPolicy.ShouldRefresh(
+        var canMutateView = !IsDashboardLoaded || DeviceListRefreshPolicy.ShouldRefresh(
             Keyboard.FocusedElement is TextBox,
             editableView?.IsAddingNew == true,
             editableView?.IsEditingItem == true);
@@ -2340,8 +2682,11 @@ public partial class MainWindow : Window
         SyncNetworkAutomationDeviceNames();
         RefreshDashboardSummary();
         RefreshEngineHealthDisplay();
-        EmptyState.Visibility = Devices.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        DeviceCountText.Text = $"{Devices.Count} device{(Devices.Count == 1 ? string.Empty : "s")}";
+        if (IsDashboardLoaded)
+        {
+            EmptyState.Visibility = Devices.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            DeviceCountText.Text = $"{Devices.Count} device{(Devices.Count == 1 ? string.Empty : "s")}";
+        }
     }
 
     private async Task OnDeviceRuleChangedAsync(DeviceViewModel device, bool forceApply)
@@ -2393,19 +2738,18 @@ public partial class MainWindow : Window
             await Dispatcher.InvokeAsync(
                 () =>
                 {
-                    DetailStatusText.Text =
-                        aliasChanged && !ruleChanged
+                    SetDetailStatus(aliasChanged && !ruleChanged
                             ? $"Device renamed to {device.DisplayName}."
                             : engine.IsRunning
                             ? $"Rule applied to {device.DisplayName}."
-                            : $"Rule saved for {device.DisplayName}; it activates when control starts.";
+                            : $"Rule saved for {device.DisplayName}; it activates when control starts.");
                     RefreshDashboardSummary(addTrafficSample: false);
                 });
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            await Dispatcher.InvokeAsync(() => DetailStatusText.Text = exception.Message);
+            await Dispatcher.InvokeAsync(() => SetDetailStatus(exception.Message));
             throw;
         }
     }
@@ -2455,6 +2799,11 @@ public partial class MainWindow : Window
 
     private void ScheduleEngineStatusDispatch()
     {
+        if (!IsDashboardLoaded)
+        {
+            return;
+        }
+
         if (Interlocked.Exchange(ref engineStatusDispatchScheduled, 1) != 0)
         {
             return;
@@ -2470,7 +2819,7 @@ public partial class MainWindow : Window
         var latestMessage = Interlocked.Exchange(ref pendingEngineStatusMessage, null);
         if (latestMessage is not null)
         {
-            DetailStatusText.Text = latestMessage;
+            SetDetailStatus(latestMessage);
         }
 
         Interlocked.Exchange(ref engineStatusDispatchScheduled, 0);
@@ -2483,6 +2832,10 @@ public partial class MainWindow : Window
     private void Engine_OnIdentityAlertDetected(object? sender, string warning)
     {
         Interlocked.Exchange(ref pendingIdentityAlertMessage, warning);
+        if (!IsDashboardLoaded)
+        {
+            return;
+        }
         if (Interlocked.Exchange(ref identityAlertDispatchScheduled, 1) == 0)
         {
             _ = Dispatcher.BeginInvoke(
@@ -2493,10 +2846,16 @@ public partial class MainWindow : Window
 
     private void DrainIdentityAlertDispatch()
     {
+        if (!IsDashboardLoaded)
+        {
+            Interlocked.Exchange(ref identityAlertDispatchScheduled, 0);
+            return;
+        }
+
         var latestWarning = Interlocked.Exchange(ref pendingIdentityAlertMessage, null);
         if (latestWarning is not null)
         {
-            DetailStatusText.Text = latestWarning;
+            SetDetailStatus(latestWarning);
             SetStatus(latestWarning, false);
         }
 
@@ -2517,7 +2876,7 @@ public partial class MainWindow : Window
         _ = Dispatcher.InvokeAsync(() =>
         {
             ApplyEngineState(eventArgs.IsRunning, eventArgs.IsHealthy);
-            DetailStatusText.Text = eventArgs.StatusMessage;
+            SetDetailStatus(eventArgs.StatusMessage);
             RefreshEngineHealthDisplay();
             if (!eventArgs.IsRunning &&
                 !stopInProgress &&
@@ -2534,6 +2893,11 @@ public partial class MainWindow : Window
         if (isRunning)
         {
             controlStartedAt ??= DateTimeOffset.UtcNow;
+            if (!IsDashboardLoaded)
+            {
+                refreshTimer.Stop();
+                return;
+            }
             refreshTimer.Start();
             TopStatusText.Text = isHealthy ? "Active" : "Degraded";
             StatusDot.Fill = isHealthy
@@ -2544,6 +2908,10 @@ public partial class MainWindow : Window
         {
             refreshTimer.Stop();
             controlStartedAt = null;
+            if (!IsDashboardLoaded)
+            {
+                return;
+            }
             UptimeText.Text = "Idle";
             TopStatusText.Text = "Idle";
             StatusDot.Fill = new SolidColorBrush(Color.FromRgb(168, 144, 149));
@@ -2556,6 +2924,11 @@ public partial class MainWindow : Window
 
     private void RefreshEngineHealthDisplay()
     {
+        if (!IsDashboardLoaded)
+        {
+            return;
+        }
+
         var snapshot = engine.GetHealthSnapshot();
         if (!snapshot.IsRunning)
         {
@@ -2665,14 +3038,14 @@ public partial class MainWindow : Window
             UpdateKnownDeviceHints();
             await settingsStore.SaveAsync(settings);
             settingsDirty = false;
-            DetailStatusText.Text = identity.PreviousMacKey is null
+            SetDetailStatus(identity.PreviousMacKey is null
                 ? $"Remembered {eventArgs.HostName}."
-                : $"Recognized {eventArgs.HostName} after its private MAC changed.";
+                : $"Recognized {eventArgs.HostName} after its private MAC changed.");
         }
         catch (Exception exception) when (
             exception is IOException or InvalidOperationException)
         {
-            DetailStatusText.Text = exception.Message;
+            SetDetailStatus(exception.Message);
         }
         finally
         {
@@ -2682,6 +3055,13 @@ public partial class MainWindow : Window
 
     private async void MainWindow_OnClosing(object? sender, CancelEventArgs eventArgs)
     {
+        if (!exitRequested)
+        {
+            eventArgs.Cancel = true;
+            MinimizeToTray();
+            return;
+        }
+
         autoScanTimer.Stop();
         scriptAutomationTimer.Stop();
         networkAutomationTimer.Stop();
@@ -2735,6 +3115,11 @@ public partial class MainWindow : Window
 
     private void UpdateButtons()
     {
+        if (!IsDashboardLoaded)
+        {
+            return;
+        }
+
         var hasAdapter = AdapterSelector.SelectedItem is AdapterProfile;
         StartButton.IsEnabled = hasAdapter &&
                                 !engine.IsRunning &&
@@ -2763,27 +3148,27 @@ public partial class MainWindow : Window
         StopButton.Visibility = engine.IsRunning ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private void MinimizeWindowButton_OnClick(object sender, RoutedEventArgs eventArgs)
+    internal void MinimizeWindowButton_OnClick(object sender, RoutedEventArgs eventArgs)
     {
-        WindowState = WindowState.Minimized;
+        MinimizeToTray();
     }
 
-    private void MaximizeWindowButton_OnClick(object sender, RoutedEventArgs eventArgs)
+    internal void MaximizeWindowButton_OnClick(object sender, RoutedEventArgs eventArgs)
     {
         WindowState = WindowState == WindowState.Maximized
             ? WindowState.Normal
             : WindowState.Maximized;
     }
 
-    private void CloseWindowButton_OnClick(object sender, RoutedEventArgs eventArgs)
+    internal void CloseWindowButton_OnClick(object sender, RoutedEventArgs eventArgs)
     {
-        Close();
+        MinimizeToTray();
     }
 
-    private void NavigationButton_OnClick(object sender, RoutedEventArgs eventArgs)
+    internal void NavigationButton_OnClick(object sender, RoutedEventArgs eventArgs)
     {
         if (sender is not Button { Tag: string targetName } ||
-            FindName(targetName) is not FrameworkElement target)
+            dashboard?.FindName(targetName) is not FrameworkElement target)
         {
             return;
         }
@@ -2839,6 +3224,11 @@ public partial class MainWindow : Window
 
     private void RefreshDashboardSummary(bool addTrafficSample = true)
     {
+        if (!IsDashboardLoaded)
+        {
+            return;
+        }
+
         var summary = DashboardSummary.From(Devices);
         ConnectedDevicesMetric.Text = summary.ConnectedDevices.ToString();
         DownloadMetric.Text = DeviceViewModel.FormatRate(summary.DownloadBytesPerSecond);
@@ -2869,13 +3259,20 @@ public partial class MainWindow : Window
 
     private void SetStatus(string message, bool? active)
     {
+        lastDetailStatus = message;
+        lastStatusActive = active;
+        if (!IsDashboardLoaded)
+        {
+            return;
+        }
+
         TopStatusText.Text = active switch
         {
             true => "Active",
             false => "Needs attention",
             null => engine.IsRunning ? "Working" : "Idle",
         };
-        DetailStatusText.Text = message;
+        SetDetailStatus(message);
         StatusDot.Fill = new SolidColorBrush(
             active switch
             {

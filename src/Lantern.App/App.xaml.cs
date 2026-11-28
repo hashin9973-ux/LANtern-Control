@@ -5,6 +5,14 @@ namespace Lantern.App;
 
 public partial class App : Application
 {
+    protected override void OnStartup(StartupEventArgs eventArgs)
+    {
+        base.OnStartup(eventArgs);
+        var mainWindow = new MainWindow();
+        MainWindow = mainWindow;
+        mainWindow.Show();
+    }
+
     public App()
     {
         DispatcherUnhandledException += OnDispatcherUnhandledException;
