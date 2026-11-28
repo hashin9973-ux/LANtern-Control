@@ -62,7 +62,7 @@ public sealed class WindowsWifiNetworkMonitorTests
     [Fact]
     public async Task GetVisibleSsidsAsync_ReusesOnlyARecentSuccessfulScan()
     {
-        var source = new FakeWifiScanSource(new[] { "HUAWEI-AX3", "Cafe-WiFi", "cafe-wifi" });
+        var source = new FakeWifiScanSource((object)new[] { "HUAWEI-AX3", "Cafe-WiFi", "cafe-wifi" });
         var monitor = new WindowsWifiNetworkMonitor(source, TimeSpan.FromMinutes(1));
 
         var first = await monitor.GetVisibleSsidsAsync();
@@ -78,7 +78,7 @@ public sealed class WindowsWifiNetworkMonitorTests
     {
         var source = new FakeWifiScanSource(
             new InvalidOperationException("Location permission is missing."),
-            new[] { "Cafe-WiFi" });
+            (object)new[] { "Cafe-WiFi" });
         var monitor = new WindowsWifiNetworkMonitor(source, TimeSpan.FromMinutes(1));
 
         await Assert.ThrowsAsync<InvalidOperationException>(
