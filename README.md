@@ -134,8 +134,7 @@ be built from source with `scripts/publish.ps1`; see [Building from source](#bui
    APPIMAGE_EXTRACT_AND_RUN=1 ./LANtern-Control-v0.1.0-x86_64.AppImage
    ```
 
-Always click **Stop & restore** before closing LANtern, changing networks,
-disconnecting the selected adapter, suspending, or rebooting.
+Click **Stop & restore** before leaving the managed network, disconnecting the selected adapter, suspending, rebooting, or fully exiting LANtern. The window's minimize and close buttons hide the dashboard in the system tray and unload its UI while LANtern's controller and enabled background automations keep running. To end the process, choose **Exit** from the tray menu; LANtern then performs its normal shutdown and network restoration.
 
 ## How to use
 
@@ -152,8 +151,8 @@ disconnecting the selected adapter, suspending, or rebooting.
 4. Click **Start control** to revalidate previously discovered devices and enable their saved rules with live capture. This startup check targets remembered addresses only; it does not scan the subnet. On Windows, newly discovered devices can also be found by **Auto scan** when enabled.
 5. Enter a download or upload limit in `KB/s`. A value of `0` means unlimited.
 6. Use the **Internet** switch to pause or restore a device's connection.
-7. Open **Script automation** from the left sidebar. Use **Open…** to load a `.ps1` file, **Run now** to test it, or explicitly enable a 60–3600 second schedule. The schedule stops when LANtern closes and skips overlapping runs.
-8. Open **Network automation** to add a Wi-Fi SSID keyword for a controllable device. While Start control is active, LANtern scans all Wi-Fi networks currently visible to this PC and turns on that device's normal Paused setting when any visible SSID contains the keyword. If no visible SSID matches, LANtern turns that setting off. A failed or unrecognized scan leaves existing device states unchanged. Configure polling from 5 to 3600 seconds. This runs only while LANtern is open and Start control is active.
+7. Open **Script automation** from the left sidebar. Use **Open…** to load a `.ps1` file, **Run now** to test it, or explicitly enable a 60–3600 second schedule. The schedule continues while the dashboard is in the system tray and stops when you choose **Exit** or the process otherwise terminates; overlapping runs are skipped.
+8. Open **Network automation** to add a Wi-Fi SSID keyword for a controllable device. While Start control is active, LANtern scans all Wi-Fi networks currently visible to this PC and turns on that device's normal Paused setting when any visible SSID contains the keyword. If no visible SSID matches, LANtern turns that setting off. A failed or unrecognized scan leaves existing device states unchanged. Configure polling from 5 to 3600 seconds. This runs while the LANtern process is running and Start control is active, including when the dashboard has been unloaded to the system tray.
 9. Open **Visited domains** to inspect the destination domains LANtern can
    observe for each device.
 10. Add individual domain rules or use a service preset to block domains for a
@@ -285,8 +284,8 @@ MAC address rather than row order or display name. The helper sends an explicit
 pause/resume request over a local named pipe restricted to the current Windows
 user and applies the change through LANtern's existing device-rule path. It
 does not use Windows UI Automation, activate the LANtern window, change pages,
-or scroll the device list. **LANtern can stay minimized to the taskbar while
-the script runs.** The application must remain running and the device must
+or scroll the device list. **LANtern can stay in the system tray with its dashboard
+unloaded while the script runs.** The application must remain running and the device must
 already be present as a controllable device in LANtern. Inventory-only and
 protected devices cannot be paused.
 
