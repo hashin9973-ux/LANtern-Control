@@ -96,6 +96,7 @@ public partial class MainWindow : Window
     private Forms.ContextMenuStrip? trayMenu;
     private DrawingIcon? trayIconImage;
     private bool exitRequested;
+    private WindowState restoreWindowState = WindowState.Normal;
     private bool settingsLoaded;
     private bool startupSettingsNormalized;
     private bool dashboardInitializationInProgress;
@@ -295,6 +296,12 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (WindowState != WindowState.Minimized)
+        {
+            restoreWindowState = WindowState;
+            WindowState = WindowState.Minimized;
+        }
+
         ShowInTaskbar = false;
         Hide();
         if (dashboardInitializationInProgress)
@@ -316,12 +323,13 @@ public partial class MainWindow : Window
         var requiresInitialization = dashboard is null;
         hideAfterInitialization = false;
         CreateDashboardView();
+        WindowState = restoreWindowState;
+        restoreWindowState = WindowState.Normal;
         ShowInTaskbar = true;
         if (!IsVisible)
         {
             Show();
         }
-        WindowState = WindowState.Normal;
         Activate();
 
         if (requiresInitialization)
