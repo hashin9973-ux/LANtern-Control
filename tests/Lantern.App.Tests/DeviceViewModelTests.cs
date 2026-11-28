@@ -242,8 +242,26 @@ public sealed class DeviceViewModelTests
                         window.FindName("MinimizeWindowButton"));
                     minimizeButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                     Assert.Equal(WindowState.Minimized, window.WindowState);
+                    Assert.False(window.ShowInTaskbar);
+                    Assert.Null(window.FindName("MaximizeWindowButton"));
+
+                    var dashboardField = typeof(MainWindow).GetField(
+                        "dashboard",
+                        System.Reflection.BindingFlags.Instance |
+                        System.Reflection.BindingFlags.NonPublic);
+                    Assert.NotNull(dashboardField);
+                    Assert.Null(dashboardField.GetValue(window));
+
+                    var recreateDashboard = typeof(MainWindow).GetMethod(
+                        "CreateDashboardView",
+                        System.Reflection.BindingFlags.Instance |
+                        System.Reflection.BindingFlags.NonPublic);
+                    Assert.NotNull(recreateDashboard);
+                    recreateDashboard.Invoke(window, null);
+                    window.ShowInTaskbar = true;
                     window.WindowState = WindowState.Normal;
 
+                    Assert.NotNull(dashboardField.GetValue(window));
                     var maximizeButton = Assert.IsType<Button>(
                         window.FindName("MaximizeWindowButton"));
                     maximizeButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));

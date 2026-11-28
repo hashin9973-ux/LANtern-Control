@@ -129,50 +129,10 @@ public partial class MainWindow : Window
 
     private bool IsDashboardLoaded => dashboard is not null;
 
-    private object? FindDashboardElement(string name)
-    {
-        if (dashboard is null)
-        {
-            return null;
-        }
-
-        return dashboard.FindName(name) ?? FindNamedDashboardElement(dashboard, name);
-    }
-
-    private static FrameworkElement? FindNamedDashboardElement(
-        DependencyObject root,
-        string name)
-    {
-        var pending = new Stack<DependencyObject>();
-        var visited = new HashSet<DependencyObject>();
-        pending.Push(root);
-
-        while (pending.Count > 0)
-        {
-            var current = pending.Pop();
-            if (!visited.Add(current))
-            {
-                continue;
-            }
-
-            if (current is FrameworkElement element &&
-                string.Equals(element.Name, name, StringComparison.Ordinal))
-            {
-                return element;
-            }
-
-            foreach (var child in LogicalTreeHelper.GetChildren(current)
-                         .OfType<DependencyObject>())
-            {
-                pending.Push(child);
-            }
-        }
-
-        return null;
-    }
+    private object? FindDashboardElement(string name) => dashboard?.FindName(name);
 
     public new object? FindName(string name) =>
-        FindDashboardElement(name) ?? base.FindName(name);
+        dashboard?.FindName(name) ?? base.FindName(name);
 
 
     private dynamic SidebarVersionText => FindDashboardElement(nameof(SidebarVersionText))!;
