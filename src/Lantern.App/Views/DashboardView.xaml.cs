@@ -35,7 +35,7 @@ public partial class DashboardView : UserControl
 
     private void StopButton_OnClick(object sender, RoutedEventArgs eventArgs) => owner.StopButton_OnClick(sender, eventArgs);
 
-    private void ClearActivityButton_OnClick(object sender, RoutedEventArgs eventArgs) => owner.ClearActivityButton_OnClick(sender, eventArgs);
+    private void ClearActivityButton_OnClick(object sender, RoutedEventArgs eventArgs) => owner.ForwardClearActivityButton_OnClick(sender, eventArgs);
 
     private void BlockVisitedDomainButton_OnClick(
         object sender,

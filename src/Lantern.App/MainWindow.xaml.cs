@@ -2007,7 +2007,10 @@ public partial class MainWindow : Window
         }
     }
 
-    internal void ClearActivityButton_OnClick(object sender, RoutedEventArgs eventArgs)
+    internal void ForwardClearActivityButton_OnClick(object sender, RoutedEventArgs eventArgs) =>
+        ClearActivityButton_OnClick(sender, eventArgs);
+
+    private void ClearActivityButton_OnClick(object sender, RoutedEventArgs eventArgs)
     {
         ClearObservedActivity();
         SetDetailStatus("Website activity cleared from this session.");
