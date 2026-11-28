@@ -65,6 +65,33 @@ public sealed class DeviceActivityViewModelTests
     }
 
     [Fact]
+    public void Observe_AppliesAggregatedPacketCountAndAllObservationSources()
+    {
+        var firstSeen = DateTimeOffset.Parse("2026-08-01T12:00:00Z");
+        var activity = new DeviceActivityViewModel(
+            "E261190DBD54",
+            "Phone",
+            "192.168.31.61",
+            "youtube.com",
+            DomainObservationSource.Dns,
+            firstSeen,
+            [DomainObservationSource.Tls, DomainObservationSource.Http],
+            observationCount: 4);
+
+        activity.Observe(
+            "POCO-F6",
+            "192.168.31.213",
+            DomainObservationSource.Dns,
+            firstSeen.AddSeconds(5),
+            [DomainObservationSource.Tls],
+            observationCount: 3);
+
+        Assert.Equal(7, activity.HitCount);
+        Assert.Equal("DNS + TLS + HTTP", activity.SourceLabel);
+        Assert.Equal(firstSeen.AddSeconds(5), activity.LastSeen);
+    }
+
+    [Fact]
     public void BlockingState_ChangesVisitedDomainActionWithoutRemovingActivity()
     {
         var activity = new DeviceActivityViewModel(

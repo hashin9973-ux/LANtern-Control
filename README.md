@@ -37,6 +37,7 @@ use case.
 - Pause and restore a device's IPv4 internet connection.
 - Copy a complete, device-specific PowerShell script for focus-free background pause/resume automation.
 - Edit, save, and run PowerShell scripts in the Windows app from the dedicated **Script automation** page, with an optional configurable schedule.
+- Configure Wi-Fi SSID keyword automations that use the normal device pause setting while control is active and unpause the device when the network name no longer matches.
 - Observe domains through DNS queries, TLS server names, and plain HTTP host
   headers without decrypting private HTTPS content.
 - Block domains for individual devices, including presets for common services.
@@ -133,8 +134,7 @@ be built from source with `scripts/publish.ps1`; see [Building from source](#bui
    APPIMAGE_EXTRACT_AND_RUN=1 ./LANtern-Control-v0.1.0-x86_64.AppImage
    ```
 
-Always click **Stop & restore** before closing LANtern, changing networks,
-disconnecting the selected adapter, suspending, or rebooting.
+Click **Stop & restore** before leaving the managed network, disconnecting the selected adapter, suspending, rebooting, or fully exiting LANtern. The window's minimize and close buttons hide the dashboard in the system tray and unload its UI while LANtern's controller and enabled background automations keep running. To end the process, choose **Exit** from the tray menu; LANtern then performs its normal shutdown and network restoration.
 
 ## How to use
 
@@ -151,12 +151,13 @@ disconnecting the selected adapter, suspending, or rebooting.
 4. Click **Start control** to revalidate previously discovered devices and enable their saved rules with live capture. This startup check targets remembered addresses only; it does not scan the subnet. On Windows, newly discovered devices can also be found by **Auto scan** when enabled.
 5. Enter a download or upload limit in `KB/s`. A value of `0` means unlimited.
 6. Use the **Internet** switch to pause or restore a device's connection.
-7. Open **Script automation** from the left sidebar. Use **Open…** to load a `.ps1` file, **Run now** to test it, or explicitly enable a 60–3600 second schedule. The schedule stops when LANtern closes and skips overlapping runs.
-8. Open **Visited domains** to inspect the destination domains LANtern can
+7. Open **Script automation** from the left sidebar. Use **Open…** to load a `.ps1` file, **Run now** to test it, or explicitly enable a 60–3600 second schedule. The schedule continues while the dashboard is in the system tray and stops when you choose **Exit** or the process otherwise terminates; overlapping runs are skipped.
+8. Open **Network automation** to add a Wi-Fi SSID keyword for a controllable device. While Start control is active, LANtern scans all Wi-Fi networks currently visible to this PC and turns on that device's normal Paused setting when any visible SSID contains the keyword. If no visible SSID matches, LANtern turns that setting off. A failed or unrecognized scan leaves existing device states unchanged. Configure polling from 5 to 3600 seconds. This runs while the LANtern process is running and Start control is active, including when the dashboard has been unloaded to the system tray.
+9. Open **Visited domains** to inspect the destination domains LANtern can
    observe for each device.
-9. Add individual domain rules or use a service preset to block domains for a
+10. Add individual domain rules or use a service preset to block domains for a
    selected device.
-10. Click **Stop & restore** before changing adapters, leaving the network, or
+11. Click **Stop & restore** before changing adapters, leaving the network, or
    shutting down the controller computer.
 
 Settings, saved device identities, and rules are stored locally in:
@@ -283,8 +284,8 @@ MAC address rather than row order or display name. The helper sends an explicit
 pause/resume request over a local named pipe restricted to the current Windows
 user and applies the change through LANtern's existing device-rule path. It
 does not use Windows UI Automation, activate the LANtern window, change pages,
-or scroll the device list. **LANtern can stay minimized to the taskbar while
-the script runs.** The application must remain running and the device must
+or scroll the device list. **LANtern can stay in the system tray with its dashboard
+unloaded while the script runs.** The application must remain running and the device must
 already be present as a controllable device in LANtern. Inventory-only and
 protected devices cannot be paused.
 
@@ -296,6 +297,10 @@ helper functions, and Overview navigation/scroll block with the new generated
 SSID matching, and existing `Set-LanternPaused -AutomationId ... -Paused ...`
 calls. The example pause/resume commands in a newly copied template remain
 commented out until you enable the actions you intend to run.
+
+## Network keyword automation
+
+The Windows app uses the Native Wi-Fi API to request a fresh scan on every ready wireless interface, waits for each interface's scan-complete notification, then reads all BSS entries with `WlanGetNetworkBssList`. This checks nearby visible networks across all enumerated WLAN interfaces, not only the network to which the PC is connected, and does not launch `netsh` or a console process. Results are deduplicated by SSID and cached for at most 10 seconds so a five-second automation poll does not repeatedly disrupt the wireless radio. When any visible SSID matches a configured keyword using a case-insensitive substring comparison, LANtern pauses the selected device through the existing device-rule application path. When a successful scan finds no match (or no networks are visible), LANtern unpauses the target device. If Windows denies Wi-Fi access, the WLAN service is stopped, the radio is disabled, or a scan fails or times out, LANtern reports the specific scan failure and leaves existing device pause states unchanged. On Windows versions that enforce Wi-Fi location privacy, enable Location services and **Let desktop apps access your location** in Windows Settings. Disabling or deleting an automation, or stopping Start control, unpauses its target device. Network automations never pause devices while control is stopped. One automation can be configured per target device. Polling defaults to 15 seconds and can be configured from 5 to 3600 seconds. It runs only while the application is open and **Start control** is active.
 
 ## Domain visibility and blocking
 

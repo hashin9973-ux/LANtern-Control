@@ -10,11 +10,15 @@ public sealed class AppSettings
 
     public int AutoScanIntervalSeconds { get; set; } = 60;
 
+    public int NetworkAutomationPollIntervalSeconds { get; set; } = 15;
+
     public bool ScriptAutomationEnabled { get; set; }
 
     public int ScriptAutomationIntervalSeconds { get; set; } = 60;
 
     public string? ScriptAutomationPath { get; set; }
+
+    public List<NetworkKeywordAutomation> NetworkKeywordAutomations { get; init; } = [];
 
     public Dictionary<string, DevicePreferences> Devices { get; init; } =
         new(StringComparer.OrdinalIgnoreCase);

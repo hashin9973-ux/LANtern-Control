@@ -360,6 +360,79 @@ public sealed class SettingsStoreTests
     }
 
     [Fact]
+    public async Task SaveAndLoad_PersistsNetworkKeywordAutomationAndPollInterval()
+    {
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            var store = new SettingsStore(directory);
+            var settings = new AppSettings
+            {
+                NetworkAutomationPollIntervalSeconds = 30,
+                NetworkKeywordAutomations =
+                [
+                    new NetworkKeywordAutomation
+                    {
+                        Id = "wifi-rule-1",
+                        DeviceMacAddress = "e2:61:19:0d:bd:54",
+                        NetworkKeyword = "  Home-WiFi  ",
+                        Enabled = false,
+                        HasCapturedPauseState = true,
+                        OriginalPauseInternet = true,
+                    },
+                ],
+            };
+
+            await store.SaveAsync(settings);
+            var loaded = await store.LoadAsync();
+            Assert.Equal(30, loaded.NetworkAutomationPollIntervalSeconds);
+            var automation = Assert.Single(loaded.NetworkKeywordAutomations);
+            Assert.Equal("wifi-rule-1", automation.Id);
+            Assert.Equal("E261190DBD54", automation.DeviceMacAddress);
+            Assert.Equal("Home-WiFi", automation.NetworkKeyword);
+            Assert.False(automation.Enabled);
+            Assert.True(automation.HasCapturedPauseState);
+            Assert.True(automation.OriginalPauseInternet);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SaveAndLoad_DropsInvalidAndDuplicateNetworkKeywordAutomations()
+    {
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            var store = new SettingsStore(directory);
+            var settings = new AppSettings
+            {
+                NetworkAutomationPollIntervalSeconds = 2,
+                NetworkKeywordAutomations =
+                [
+                    new NetworkKeywordAutomation { Id = "one", DeviceMacAddress = "e2:61:19:0d:bd:54", NetworkKeyword = " Home " },
+                    new NetworkKeywordAutomation { Id = "two", DeviceMacAddress = "E261190DBD54", NetworkKeyword = "Other" },
+                    new NetworkKeywordAutomation { Id = "bad-mac", DeviceMacAddress = "not-a-mac", NetworkKeyword = "Guest" },
+                    new NetworkKeywordAutomation { Id = "empty-keyword", DeviceMacAddress = "001122334455", NetworkKeyword = " " },
+                ],
+            };
+
+            await store.SaveAsync(settings);
+            var loaded = await store.LoadAsync();
+            Assert.Equal(15, loaded.NetworkAutomationPollIntervalSeconds);
+            var automation = Assert.Single(loaded.NetworkKeywordAutomations);
+            Assert.Equal("one", automation.Id);
+            Assert.Equal("Home", automation.NetworkKeyword);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ConcurrentStores_SerializeWritesToTheSameSettingsPath()
     {
         var directory = CreateTemporaryDirectory();

@@ -165,6 +165,9 @@ public sealed class SettingsStore
             AutoScanIntervalSeconds = settings.AutoScanIntervalSeconds is >= 1 and <= 3600
                 ? settings.AutoScanIntervalSeconds
                 : 60,
+            NetworkAutomationPollIntervalSeconds = settings.NetworkAutomationPollIntervalSeconds is >= 5 and <= 3600
+                ? settings.NetworkAutomationPollIntervalSeconds
+                : 15,
             ScriptAutomationEnabled = settings.ScriptAutomationEnabled &&
                                       !string.IsNullOrWhiteSpace(settings.ScriptAutomationPath),
             ScriptAutomationIntervalSeconds = settings.ScriptAutomationIntervalSeconds is >= 60 and <= 3600
@@ -174,6 +177,40 @@ public sealed class SettingsStore
                 ? null
                 : settings.ScriptAutomationPath.Trim(),
         };
+        var automationIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var automatedDevices = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var automation in settings.NetworkKeywordAutomations ?? [])
+        {
+            if (automation is null ||
+                string.IsNullOrWhiteSpace(automation.DeviceMacAddress) ||
+                string.IsNullOrWhiteSpace(automation.NetworkKeyword))
+                continue;
+
+            string macAddress;
+            try { macAddress = TrafficPolicy.NormalizeMac(automation.DeviceMacAddress); }
+            catch (FormatException) { continue; }
+
+            var keyword = automation.NetworkKeyword.Trim();
+            if (keyword.Length is 0 or > 128 || !automatedDevices.Add(macAddress))
+                continue;
+
+            var id = string.IsNullOrWhiteSpace(automation.Id)
+                ? Guid.NewGuid().ToString("N")
+                : automation.Id.Trim();
+            if (id.Length > 64 || !automationIds.Add(id))
+                continue;
+
+            normalized.NetworkKeywordAutomations.Add(new NetworkKeywordAutomation
+            {
+                Id = id,
+                DeviceMacAddress = macAddress,
+                NetworkKeyword = keyword,
+                Enabled = automation.Enabled,
+                HasCapturedPauseState = automation.HasCapturedPauseState,
+                OriginalPauseInternet = automation.OriginalPauseInternet,
+            });
+        }
+
         foreach (var pair in settings.Devices)
         {
             string mac;

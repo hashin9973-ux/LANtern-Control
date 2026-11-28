@@ -186,6 +186,7 @@ public sealed class DeviceViewModelTests
                         "ActivityNavButton",
                         "DomainRulesNavButton",
                         "ScriptAutomationNavButton",
+                        "NetworkAutomationNavButton",
                         "AdapterStrip",
                         "MetricsPanel",
                         "ConnectedDevicesMetric",
@@ -197,6 +198,11 @@ public sealed class DeviceViewModelTests
                         "WebsiteActivityDeviceList",
                         "ClearActivityButton",
                         "DomainRulesSection",
+                        "NetworkAutomationSection",
+                        "NetworkAutomationDeviceSelector",
+                        "NetworkAutomationKeywordTextBox",
+                        "NetworkAutomationPollIntervalTextBox",
+                        "NetworkAutomationStatusText",
                         "DomainPresetDeviceSelector",
                         "DomainPresetSelector",
                         "ApplyDomainPresetButton",
@@ -236,8 +242,26 @@ public sealed class DeviceViewModelTests
                         window.FindName("MinimizeWindowButton"));
                     minimizeButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                     Assert.Equal(WindowState.Minimized, window.WindowState);
+                    Assert.False(window.ShowInTaskbar);
+                    Assert.Null(window.FindName("MaximizeWindowButton"));
+
+                    var dashboardField = typeof(MainWindow).GetField(
+                        "dashboard",
+                        System.Reflection.BindingFlags.Instance |
+                        System.Reflection.BindingFlags.NonPublic);
+                    Assert.NotNull(dashboardField);
+                    Assert.Null(dashboardField.GetValue(window));
+
+                    var recreateDashboard = typeof(MainWindow).GetMethod(
+                        "CreateDashboardView",
+                        System.Reflection.BindingFlags.Instance |
+                        System.Reflection.BindingFlags.NonPublic);
+                    Assert.NotNull(recreateDashboard);
+                    recreateDashboard.Invoke(window, null);
+                    window.ShowInTaskbar = true;
                     window.WindowState = WindowState.Normal;
 
+                    Assert.NotNull(dashboardField.GetValue(window));
                     var maximizeButton = Assert.IsType<Button>(
                         window.FindName("MaximizeWindowButton"));
                     maximizeButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -294,10 +318,13 @@ public sealed class DeviceViewModelTests
                         window.FindName("DomainRulesSection"));
                     var scriptAutomationSection = Assert.IsType<Border>(
                         window.FindName("ScriptAutomationSection"));
+                    var networkAutomationSection = Assert.IsType<Border>(
+                        window.FindName("NetworkAutomationSection"));
                     Assert.Equal(Visibility.Visible, overviewSection.Visibility);
                     Assert.Equal(Visibility.Collapsed, websiteSection.Visibility);
                     Assert.Equal(Visibility.Collapsed, domainRulesSection.Visibility);
                     Assert.Equal(Visibility.Collapsed, scriptAutomationSection.Visibility);
+                    Assert.Equal(Visibility.Collapsed, networkAutomationSection.Visibility);
 
                     var activityNav = Assert.IsType<Button>(window.FindName("ActivityNavButton"));
                     activityNav.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -324,6 +351,12 @@ public sealed class DeviceViewModelTests
                     Assert.Equal(Visibility.Collapsed, websiteSection.Visibility);
                     Assert.Equal(Visibility.Collapsed, domainRulesSection.Visibility);
                     Assert.Equal(Visibility.Visible, scriptAutomationSection.Visibility);
+                    var networkAutomationNav = Assert.IsType<Button>(
+                        window.FindName("NetworkAutomationNavButton"));
+                    networkAutomationNav.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    Assert.Equal(Visibility.Collapsed, overviewSection.Visibility);
+                    Assert.Equal(Visibility.Visible, networkAutomationSection.Visibility);
+                    Assert.NotNull(window.FindName("NetworkAutomationPollIntervalTextBox"));
 
                     var presetSelector = Assert.IsType<ComboBox>(
                         window.FindName("DomainPresetSelector"));
@@ -367,6 +400,12 @@ public sealed class DeviceViewModelTests
                         "The traffic chart must clip strokes and markers inside its own drawing surface.");
                     var deviceGrid = Assert.IsType<DataGrid>(window.FindName("DeviceGrid"));
                     Assert.Equal(68, deviceGrid.RowHeight);
+                    var internetColumn = Assert.IsType<DataGridTemplateColumn>(
+                        Assert.Single(deviceGrid.Columns, candidate => Equals(candidate.Header, "INTERNET")));
+                    var pauseCheckBox = Assert.IsType<CheckBox>(internetColumn.CellTemplate!.LoadContent());
+                    var pauseBinding = Assert.IsType<Binding>(
+                        BindingOperations.GetBinding(pauseCheckBox, ToggleButton.IsCheckedProperty));
+                    Assert.Equal(nameof(DeviceViewModel.PauseInternet), pauseBinding.Path.Path);
                     var deviceColumn = Assert.IsType<DataGridTemplateColumn>(deviceGrid.Columns[0]);
                     var deviceIdentity = Assert.IsType<Grid>(deviceColumn.CellTemplate!.LoadContent());
                     Assert.Equal(new GridLength(36), deviceIdentity.ColumnDefinitions[0].Width);
@@ -401,7 +440,8 @@ public sealed class DeviceViewModelTests
                         GetProjectRoot(),
                         "src",
                         "Lantern.App",
-                        "MainWindow.xaml"));
+                        "Views",
+                        "DashboardView.xaml"));
                     Assert.DoesNotContain("Text=\"LOCAL PROCESSING\"", xaml, StringComparison.Ordinal);
                     Assert.DoesNotContain("Text=\"1 sec live\"", xaml, StringComparison.Ordinal);
                     Assert.DoesNotContain("1 second samples", xaml, StringComparison.Ordinal);
