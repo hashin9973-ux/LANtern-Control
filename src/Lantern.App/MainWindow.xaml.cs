@@ -696,7 +696,7 @@ public partial class MainWindow : Window
 
     internal async void AutoScanCheckBox_OnClick(object sender, RoutedEventArgs eventArgs)
     {
-        var enabled = AutoScanCheckBox.IsChecked == true;
+        var enabled = (bool?)AutoScanCheckBox.IsChecked == true;
         var intervalSeconds = settings.AutoScanIntervalSeconds;
         if (enabled && !TryGetAutoScanInterval(out intervalSeconds))
         {
@@ -776,7 +776,7 @@ public partial class MainWindow : Window
     }
 
     private bool TryGetAutoScanInterval(out int intervalSeconds) =>
-        int.TryParse(AutoScanIntervalTextBox.Text.Trim(), out intervalSeconds) &&
+        int.TryParse(((string)AutoScanIntervalTextBox.Text).Trim(), out intervalSeconds) &&
         intervalSeconds is >= MinimumAutoScanIntervalSeconds and <= MaximumAutoScanIntervalSeconds;
 
     private void ConfigureAutoScanTimer()
@@ -989,7 +989,7 @@ public partial class MainWindow : Window
         object sender,
         RoutedEventArgs eventArgs)
     {
-        if (!int.TryParse(NetworkAutomationPollIntervalTextBox.Text.Trim(), out var intervalSeconds) ||
+        if (!int.TryParse(((string)NetworkAutomationPollIntervalTextBox.Text).Trim(), out int intervalSeconds) ||
             intervalSeconds is < MinimumNetworkAutomationPollIntervalSeconds or > MaximumNetworkAutomationPollIntervalSeconds)
         {
             NetworkAutomationPollIntervalTextBox.Text =
@@ -1455,7 +1455,7 @@ public partial class MainWindow : Window
         object sender,
         RoutedEventArgs eventArgs)
     {
-        var enabled = ScriptAutomationCheckBox.IsChecked == true;
+        var enabled = (bool?)ScriptAutomationCheckBox.IsChecked == true;
         if (enabled && !TryGetScriptAutomationInterval(out _))
         {
             ScriptAutomationCheckBox.IsChecked = false;
@@ -1504,7 +1504,7 @@ public partial class MainWindow : Window
         var previousEnabled = settings.ScriptAutomationEnabled;
         var previousInterval = settings.ScriptAutomationIntervalSeconds;
         settings.ScriptAutomationEnabled = enabled;
-        if (enabled && TryGetScriptAutomationInterval(out var selectedInterval))
+        if (enabled && TryGetScriptAutomationInterval(out int selectedInterval))
         {
             settings.ScriptAutomationIntervalSeconds = selectedInterval;
         }
@@ -1572,7 +1572,7 @@ public partial class MainWindow : Window
     }
 
     private bool TryGetScriptAutomationInterval(out int intervalSeconds) =>
-        int.TryParse(ScriptAutomationIntervalTextBox.Text.Trim(), out intervalSeconds) &&
+        int.TryParse(((string)ScriptAutomationIntervalTextBox.Text).Trim(), out intervalSeconds) &&
         intervalSeconds is >= MinimumScriptIntervalSeconds and <= MaximumScriptIntervalSeconds;
 
     private void ConfigureScriptAutomationTimer()
